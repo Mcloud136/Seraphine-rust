@@ -21,8 +21,9 @@ VersionInfoProductName=Seraphine
 VersionInfoCopyright=Copyright © 2026 Mcloud
 DefaultDirName={localappdata}\Programs\Seraphine
 DefaultGroupName=Seraphine
+ShowLanguageDialog=no
 DisableProgramGroupPage=yes
-LicenseFile=..\LICENSE
+LicenseFile=LICENSE.zh-CN.txt
 OutputDir={#InstallerOutputDir}
 OutputBaseFilename=Seraphine-1.3.0-setup
 SetupIconFile=..\app\resource\images\logo.ico
@@ -39,13 +40,14 @@ RestartApplications=no
 SetupLogging=yes
 
 [Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
 
 [Files]
 Source: "{#AppSourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "ChineseSimplified-LICENSE.txt"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Seraphine"; Filename: "{app}\Seraphine.exe"

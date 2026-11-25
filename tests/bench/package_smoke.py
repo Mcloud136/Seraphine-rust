@@ -37,6 +37,7 @@ def verify_manifest(root):
             "unins000.exe",
         }
         and "/app/resource/game/" not in path.relative_to(root).as_posix()
+        and not path.relative_to(root).as_posix().startswith("ThirdPartyLicenses/")
     }
     assert actual == listed, (actual - listed, listed - actual)
     print(f"manifest verified: {len(files)} files")
