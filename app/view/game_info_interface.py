@@ -1,11 +1,11 @@
 import copy
 from typing import Dict
 
-from PyQt5.QtCore import pyqtSignal, Qt, QPropertyAnimation, QRect, QTimer
+from PyQt5.QtCore import pyqtSignal, Qt, QPropertyAnimation, QRect, QTimer, QSize
 from PyQt5.QtWidgets import (QHBoxLayout, QLabel, QFrame, QVBoxLayout,
                              QSpacerItem, QSizePolicy, QStackedWidget,
                              QGridLayout, QSplitter, QApplication, QWidget)
-from PyQt5.QtGui import QPixmap, QFont, QPainter, QColor, QPalette, QImage, QFontMetrics
+from PyQt5.QtGui import QFont, QPainter, QColor, QPalette, QFontMetrics
 from qasync import asyncSlot
 
 from ..common.qfluentwidgets import (SmoothScrollArea, TransparentTogglePushButton,
@@ -15,7 +15,7 @@ from app.common.icons import Icon
 from app.common.style_sheet import StyleSheet
 from app.common.signals import signalBus
 from app.common.config import cfg
-from app.components.champion_icon_widget import RoundIcon
+from app.components.champion_icon_widget import AsyncPixmapLabel, RoundIcon
 from app.components.profile_level_icon_widget import RoundLevelAvatar
 from app.components.summoner_name_button import SummonerName
 from app.components.animation_frame import CardWidget, ColorAnimationFrame
@@ -384,16 +384,13 @@ class SummonerInfoView(ColorAnimationFrame):
         self.kdaValLabel.setAlignment(Qt.AlignCenter)
         self.kdaValLabel.setObjectName("kdaValLabel")
 
-        self.rankSoloIcon = QLabel()
-
         if soloRank['tier'] not in ["Unranked", '未定级']:
             sacle, scroll, lp = 24, 4, str(soloRank['lp'])
         else:
             sacle, scroll, lp = 15, -2, '--'
 
-        self.rankSoloIcon.setPixmap(
-            QPixmap(soloRank['icon']).scaled(sacle, sacle, Qt.KeepAspectRatio,
-                                             Qt.SmoothTransformation))
+        self.rankSoloIcon = AsyncPixmapLabel(target_size=QSize(sacle, sacle))
+        self.rankSoloIcon.setPicture(soloRank['icon'])
         self.rankSoloIcon.setFixedSize(24, 24)
         self.rankSoloIcon.scroll(0, scroll)
         self.rankSoloIcon.setAlignment(Qt.AlignCenter)
@@ -407,13 +404,16 @@ class SummonerInfoView(ColorAnimationFrame):
         else:
             sacle, scroll, lp = 15, -2, '--'
 
-        self.rankFlexIcon = QLabel()
+        if flexRank['tier'] not in ["Unranked", '未定级']:
+            sacle, scroll, lp = 24, 4, str(flexRank['lp'])
+        else:
+            sacle, scroll, lp = 15, -2, '--'
+
         sacle, scroll = (24,
                          -10) if flexRank['tier'] not in ["Unranked", '未定级'
                                                           ] else (15, 0)
-        self.rankFlexIcon.setPixmap(
-            QPixmap(flexRank['icon']).scaled(sacle, sacle, Qt.KeepAspectRatio,
-                                             Qt.SmoothTransformation))
+        self.rankFlexIcon = AsyncPixmapLabel(target_size=QSize(sacle, sacle))
+        self.rankFlexIcon.setPicture(flexRank['icon'])
         self.rankFlexIcon.setFixedSize(24, 24)
         self.rankFlexIcon.scroll(0, scroll)
         self.rankFlexIcon.setAlignment(Qt.AlignCenter)

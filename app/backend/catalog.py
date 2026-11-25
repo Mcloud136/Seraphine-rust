@@ -2,9 +2,9 @@ import json
 import os
 
 def _language_name():
-    from app.common.config import cfg
+    from app.common.config import get_effective_language
 
-    return cfg.language.value.name
+    return get_effective_language().name
 
 
 def _int_keys(data):

@@ -723,6 +723,11 @@ If champions set by lane are not available, default settings will be used.</sour
         <translation>灵活排位</translation>
     </message>
     <message>
+        <location filename="../../view/career_interface.py" line="158"/>
+        <source>Ranked TFT</source>
+        <translation>云顶之弈排位</translation>
+    </message>
+    <message>
         <location filename="../../view/career_interface.py" line="58"/>
         <source>Connecting...</source>
         <translation>连接中...</translation>
@@ -3458,6 +3463,11 @@ when they are used by Seraphine, which will cost more time</source>
         <location filename="../../lol/tools.py" line="48"/>
         <source>Ranked Flex</source>
         <translation>灵活排位</translation>
+    </message>
+    <message>
+        <location filename="../../lol/tools.py" line="49"/>
+        <source>Ranked TFT</source>
+        <translation>云顶之弈排位</translation>
     </message>
     <message>
         <location filename="../../lol/tools.py" line="50"/>

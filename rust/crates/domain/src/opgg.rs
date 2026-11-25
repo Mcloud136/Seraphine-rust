@@ -65,6 +65,8 @@ fn legacy_mastery_icon(url: &str, key: u64) -> String {
 }
 
 fn tier_item(item: &Value, position: Option<&str>, stats: &Value) -> Value {
+    const MAX_COUNTERS: usize = 3;
+
     let id = integer(item, "id");
     let tier_data = field(stats, "tier_data");
     let counters = if let Some(position) = position {
@@ -76,6 +78,7 @@ fn tier_item(item: &Value, position: Option<&str>, stats: &Value) -> Value {
             .map(|entry| {
                 array(field(entry, "counters"))
                     .iter()
+                    .take(MAX_COUNTERS)
                     .map(|counter| {
                         let counter_id = integer(counter, "champion_id");
                         json!({
@@ -519,7 +522,7 @@ pub async fn resolve_icons(value: &mut Value, resolver: &mut dyn IconResolver) {
 }
 
 #[async_trait::async_trait]
-pub trait IconResolver {
+pub trait IconResolver: Send {
     async fn resolve(&mut self, spec: String) -> String;
 }
 
@@ -554,6 +557,31 @@ mod tests {
         assert_eq!(parsed["summary"]["icon"], "@champion:1");
         assert_eq!(parsed["summonerSpells"][0]["icons"][0], "@spell:4");
         assert!(parsed["augments"].is_null());
+    }
+
+    #[test]
+    fn ranked_tier_list_limits_counters_to_visible_icons() {
+        let raw = json!({
+            "data": [{
+                "id": 1,
+                "positions": [{
+                    "name": "TOP",
+                    "stats": { "tier_data": { "tier": "A", "rank": 1 } },
+                    "counters": [
+                        { "champion_id": 2 },
+                        { "champion_id": 3 },
+                        { "champion_id": 4 },
+                        { "champion_id": 5 },
+                        { "champion_id": 6 }
+                    ]
+                }]
+            }]
+        });
+        let parsed = parse_ranked_tier_list(&raw);
+        let counters = parsed["TOP"][0]["counters"].as_array().unwrap();
+        assert_eq!(counters.len(), 3);
+        assert_eq!(counters[0]["championId"], 2);
+        assert_eq!(counters[2]["championId"], 4);
     }
 
     #[test]

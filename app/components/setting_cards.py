@@ -18,6 +18,21 @@ from app.common.signals import signalBus
 from app.components.animation_frame import ColorAnimationFrame
 
 
+class HeaderStatusLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("statusLabel")
+        self.__updateMinimumWidth()
+        self.hide()
+
+    def setText(self, text):
+        super().setText(text)
+        self.__updateMinimumWidth()
+
+    def __updateMinimumWidth(self):
+        self.setMinimumWidth(self.sizeHint().width())
+
+
 class LineEditSettingCard(ExpandGroupSettingCard):
 
     def __init__(self, configItem, title, hintContent, step, min,
@@ -36,7 +51,7 @@ class LineEditSettingCard(ExpandGroupSettingCard):
         self.buttonLayout = QHBoxLayout(self.buttonWidget)
         self.pushButton = PushButton(self.tr("Apply"))
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.__initLayout()
         self.__initWidget(step, min, max)
@@ -88,7 +103,7 @@ class GameTabColorSettingCard(ExpandGroupSettingCard):
                  parent=None):
         super().__init__(Icon.BACKGROUNDCOLOR, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.inputWidget = QWidget(self.view)
         self.inputLayout = QGridLayout(self.inputWidget)
@@ -228,7 +243,7 @@ class DeathsNumberColorSettingCard(ExpandGroupSettingCard):
                  darkConfigItem: ConfigItem = None, parent=None):
         super().__init__(Icon.TEXTCOLOR, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.inputWidget = QWidget(self.view)
         self.inputLayout = QGridLayout(self.inputWidget)
@@ -349,7 +364,7 @@ class ThemeColorSettingCard(ExpandGroupSettingCard):
                  parent=None):
         super().__init__(Icon.PALETTE, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.inputWidget = QWidget(self.view)
         self.inputLayout = QGridLayout(self.inputWidget)
@@ -436,7 +451,7 @@ class ProxySettingCard(ExpandGroupSettingCard):
                  addrConfigItem: ConfigItem = None, parent=None):
         super().__init__(Icon.PLANE, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.inputWidget = QWidget(self.view)
         self.inputLayout = QHBoxLayout(self.inputWidget)
@@ -511,7 +526,7 @@ class ProxySettingCard(ExpandGroupSettingCard):
 
     def __setStatusLableText(self, addr, isChecked):
         if isChecked:
-            self.statusLabel.setText(self.tr("Enabled, proxy: ") + str(addr))
+            self.statusLabel.setText(self.tr("Enabled"))
         else:
             self.statusLabel.setText(self.tr("Disabled"))
 

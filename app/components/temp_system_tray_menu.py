@@ -4,6 +4,9 @@ from ..common.qfluentwidgets import (SystemTrayMenu)
 
 
 class TmpSystemTrayMenu(SystemTrayMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
     def adjustPosition(self):
         m = self.layout().contentsMargins()
         rect = QApplication.screenAt(QCursor.pos()).availableGeometry()

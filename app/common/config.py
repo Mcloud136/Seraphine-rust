@@ -242,13 +242,26 @@ class Config(QConfig):
     }, QueueFilterValidator())
 
 
-YEAR = 2023
-AUTHOR = "Zzaphkiel"
+YEAR = 2026
+AUTHOR = "Mcloud"
 VERSION = "1.3.0"
 BETA = None
-FEEDBACK_URL = "https://github.com/Zzaphkiel/Seraphine/issues?q=is%3Aissue"
-GITHUB_URL = "https://github.com/Zzaphkiel/Seraphine"
+FEEDBACK_URL = "https://github.com/Mcloud136/Seraphine-rust/issues?q=is%3Aissue"
+GITHUB_URL = "https://github.com/Mcloud136/Seraphine-rust"
 LOCAL_PATH = f"{os.getenv('APPDATA')}\\Seraphine"
 
 cfg = Config()
 qconfig.load(f"{LOCAL_PATH}\\config.json", cfg)
+
+
+def get_effective_language():
+    selected = cfg.language.value
+    if selected != Language.AUTO:
+        return selected
+
+    system = QLocale.system()
+    if system.language() == QLocale.Chinese:
+        return Language.CHINESE_SIMPLIFIED
+    if system.language() == QLocale.Portuguese:
+        return Language.PORTUGUESE
+    return Language.ENGLISH

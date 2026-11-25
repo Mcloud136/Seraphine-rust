@@ -25,6 +25,7 @@ pub enum LcuError {
     Http(reqwest::Error),
     Json(reqwest::Error),
     InvalidAuth,
+    Unauthorized,
     Asset(String),
     Unsupported(&'static str),
 }
@@ -36,6 +37,7 @@ impl fmt::Display for LcuError {
             Self::Http(error) => write!(formatter, "LCU HTTP error: {error}"),
             Self::Json(error) => write!(formatter, "LCU JSON error: {error}"),
             Self::InvalidAuth => formatter.write_str("invalid LCU authorization header"),
+            Self::Unauthorized => formatter.write_str("SGP authentication failed"),
             Self::Asset(message) => write!(formatter, "asset error: {message}"),
             Self::Unsupported(operation) => write!(formatter, "unsupported operation: {operation}"),
         }
@@ -241,6 +243,33 @@ impl SgpClient {
         access_token: &str,
         params: Option<&Value>,
     ) -> Result<Value, LcuError> {
+        let mut retried = false;
+        loop {
+            match self.get_json_once(path, access_token, params).await {
+                Err(error) if !retried && should_retry_sgp(&error) => {
+                    retried = true;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    pub async fn get_json_once(
+        &self,
+        path: &str,
+        access_token: &str,
+        params: Option<&Value>,
+    ) -> Result<Value, LcuError> {
+        self.send_json(path, access_token, params).await
+    }
+
+    async fn send_json(
+        &self,
+        path: &str,
+        access_token: &str,
+        params: Option<&Value>,
+    ) -> Result<Value, LcuError> {
         let mut request = self
             .client
             .get(format!("{}{path}", self.base_url))
@@ -248,7 +277,24 @@ impl SgpClient {
         if let Some(params) = params {
             request = request.query(params);
         }
-        parse_json_response(request.send().await.map_err(LcuError::Http)?).await
+        let response = request.send().await.map_err(LcuError::Http)?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(LcuError::Unauthorized);
+        }
+        parse_json_response(response).await
+    }
+}
+
+pub fn should_retry_sgp(error: &LcuError) -> bool {
+    match error {
+        LcuError::Http(error) => {
+            error.is_timeout()
+                || error.is_connect()
+                || error.status().is_some_and(|status| {
+                    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+                })
+        }
+        _ => false,
     }
 }
 
@@ -412,11 +458,119 @@ impl AssetClient {
 mod tests {
     use super::*;
 
+    fn spawn_sgp_mock(
+        responses: Vec<(u16, &'static str)>,
+    ) -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let worker_hits = Arc::clone(&hits);
+        let handle = std::thread::spawn(move || {
+            'responses: for (status, body) in responses {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                let (mut socket, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() >= deadline {
+                                break 'responses;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("mock SGP accept failed: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = socket.read(&mut request).unwrap();
+                worker_hits.fetch_add(1, Ordering::SeqCst);
+                let response = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{address}"), hits, handle)
+    }
+
+    fn mock_sgp_client(base_url: String) -> SgpClient {
+        SgpClient {
+            client: Client::builder().build().unwrap(),
+            base_url,
+        }
+    }
+
+    #[tokio::test]
+    async fn sgp_retries_server_errors_once() {
+        let (base_url, hits, worker) = spawn_sgp_mock(vec![
+            (503, r#"{"error":"unavailable"}"#),
+            (200, r#"{"ok":true}"#),
+        ]);
+        let client = mock_sgp_client(base_url);
+        let result = client.get_json("/test", "token", None).await.unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn sgp_does_not_retry_client_errors_or_unauthorized() {
+        let (base_url, hits, worker) = spawn_sgp_mock(vec![
+            (400, r#"{"error":"bad request"}"#),
+            (400, r#"{"error":"bad request"}"#),
+        ]);
+        let client = mock_sgp_client(base_url);
+        assert!(client.get_json("/test", "token", None).await.is_err());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        worker.join().unwrap();
+
+        let (base_url, hits, worker) = spawn_sgp_mock(vec![
+            (401, r#"{"error":"unauthorized"}"#),
+            (401, r#"{"error":"unauthorized"}"#),
+        ]);
+        let client = mock_sgp_client(base_url);
+        assert!(matches!(
+            client.get_json("/test", "token", None).await,
+            Err(LcuError::Unauthorized)
+        ));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn sgp_does_not_retry_invalid_json() {
+        let (base_url, hits, worker) =
+            spawn_sgp_mock(vec![(200, "not-json"), (200, r#"{"ok":true}"#)]);
+        let client = mock_sgp_client(base_url);
+        assert!(client.get_json("/test", "token", None).await.is_err());
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        worker.join().unwrap();
+    }
+
     #[test]
     fn sgp_uses_tencent_host_mapping() {
-        let client = SgpClient::new("HN1").unwrap();
-        assert!(client.base_url.contains("hn1-k8s-sgp.lol.qq.com"));
-        let client = SgpClient::new("EUW1").unwrap();
+        for (server, host) in [
+            ("HN1", "hn1-k8s-sgp.lol.qq.com"),
+            ("HN10", "hn10-k8s-sgp.lol.qq.com"),
+            ("BGP2", "bgp2-k8s-sgp.lol.qq.com"),
+            ("EUW1", "euw1-sgp.lol.qq.com"),
+            ("NA1", "na1-sgp.lol.qq.com"),
+        ] {
+            let client = SgpClient::new(server).unwrap();
+            assert!(client.base_url.contains(host), "{}", client.base_url);
+        }
+        let client = SgpClient::new("euw1").unwrap();
         assert!(client.base_url.contains("euw1-sgp.lol.qq.com"));
     }
 

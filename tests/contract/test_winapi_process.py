@@ -24,14 +24,16 @@ class WindowsApiProcessTests(unittest.TestCase):
         self.assertTrue(command_line)
 
     def test_lcu_arguments_are_parsed_without_shell(self):
-        command_line = (
-            '"LeagueClientUx.exe" --app-port=55123 '
-            '--remoting-auth-token=test-token --rso_platform_id=HN1'
-        )
-        self.assertEqual(
-            _parse_lcu_command_line(command_line),
-            ("55123", "test-token", "HN1"),
-        )
+        for server in ("HN1", "HN10", "EUW1", "NA1", "BG2"):
+            with self.subTest(server=server):
+                command_line = (
+                    '"LeagueClientUx.exe" --app-port=55123 '
+                    f'--remoting-auth-token=test-token --rso_platform_id={server}'
+                )
+                self.assertEqual(
+                    _parse_lcu_command_line(command_line),
+                    ("55123", "test-token", server),
+                )
 
     def test_psutil_failure_falls_back_to_peb(self):
         command_line = _read_process_command_line(os.getpid())

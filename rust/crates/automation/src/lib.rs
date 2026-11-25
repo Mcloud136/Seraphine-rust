@@ -109,6 +109,18 @@ impl DryRunAutomation {
         self.selection.queue_id = queue_id;
     }
 
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub fn config_revision(&self) -> u64 {
+        self.config_revision
+    }
+
     pub fn snapshot(&self) -> AutomationSnapshot {
         AutomationSnapshot {
             state: self.selection.clone(),

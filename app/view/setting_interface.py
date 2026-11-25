@@ -112,6 +112,14 @@ class SettingInterface(SeraphineInterface):
             cfg.enableSilent
         )
 
+        self.gameStartMinimizeCard = SwitchSettingCard(
+            Icon.WINDOW,
+            self.tr("Minimize to tray during game"),
+            self.tr("Hide Seraphine in the system tray when a game starts"),
+            cfg.enableGameStartMinimize,
+            self.generalGroup,
+        )
+
         self.logGroup = SettingCardGroup(self.tr("Log"), self.scrollWidget)
 
         self.logLevelCard = ComboBoxSettingCard(
@@ -286,6 +294,7 @@ class SettingInterface(SeraphineInterface):
         self.generalGroup.addSettingCard(self.enableStartLolWithApp)
         self.generalGroup.addSettingCard(self.deleteResourceCard)
         self.generalGroup.addSettingCard(self.enableCloseToTray)
+        self.generalGroup.addSettingCard(self.gameStartMinimizeCard)
         self.generalGroup.addSettingCard(self.silentCard)
 
         self.logGroup.addSettingCard(self.logLevelCard)

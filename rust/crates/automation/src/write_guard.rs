@@ -254,7 +254,7 @@ pub fn confirm_write(
                 .and_then(Value::as_array)
                 .and_then(|trades| trades.iter().find(|trade| number(trade, "id") == Some(id)))
                 .ok_or(WriteGuardError::TradeNotFound)?;
-            if trade.get("state").and_then(Value::as_str) == Some("RECEIVED") {
+            if trade.get("state").and_then(Value::as_str) != Some("ACCEPTED") {
                 return Err(WriteGuardError::ConfirmationMismatch);
             }
             return Ok(());
@@ -274,13 +274,20 @@ pub fn confirm_write(
             })
             .ok_or(WriteGuardError::InvalidSelection)?;
         if let Some(data) = data {
+            let mut matched = false;
             for key in ["spell1Id", "spell2Id", "selectedSkinId", "wardSkinId"] {
                 if let Some(expected) = number(data, key) {
+                    matched = true;
                     if number(player, key) != Some(expected) {
                         return Err(WriteGuardError::ConfirmationMismatch);
                     }
                 }
             }
+            if !matched {
+                return Err(WriteGuardError::ConfirmationMismatch);
+            }
+        } else {
+            return Err(WriteGuardError::ConfirmationMismatch);
         }
     }
     Ok(())
@@ -380,6 +387,32 @@ mod tests {
             ),
             Err(WriteGuardError::ConfirmationMismatch)
         );
+    }
+
+    #[test]
+    fn confirms_trade_only_when_accepted() {
+        let mut data = session();
+        data["trades"][0]["state"] = json!("ACCEPTED");
+        assert!(
+            confirm_write(&data, "/lol-champ-select/v1/session/trades/20/accept", None).is_ok()
+        );
+        data["trades"][0]["state"] = json!("CANCELLED");
+        assert_eq!(
+            confirm_write(&data, "/lol-champ-select/v1/session/trades/20/accept", None),
+            Err(WriteGuardError::ConfirmationMismatch)
+        );
+    }
+
+    #[test]
+    fn selection_confirmation_requires_a_verified_field() {
+        let path = "/lol-champ-select/v1/session/my-selection";
+        assert_eq!(
+            confirm_write(&session(), path, Some(&json!({}))),
+            Err(WriteGuardError::ConfirmationMismatch)
+        );
+        let mut data = session();
+        data["myTeam"][0]["spell1Id"] = json!(7);
+        assert!(confirm_write(&data, path, Some(&json!({"spell1Id": 7}))).is_ok());
     }
 
     #[test]

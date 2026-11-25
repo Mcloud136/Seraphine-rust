@@ -3,8 +3,103 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from threading import BoundedSemaphore, Lock
 
-from PyQt5.QtCore import QObject, QSize, pyqtSignal
-from PyQt5.QtGui import QImage, QImageReader
+from PyQt5.QtCore import QObject, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QImage, QImageReader, QPixmap
+
+
+class AsyncImageMixin:
+    def _initAsyncImage(self, prefix, target_size=None, use_widget_size=False):
+        self._asyncPrefix = prefix
+        self._asyncPath = None
+        self._asyncKey = None
+        self._asyncTargetSize = target_size or QSize(64, 64)
+        self._asyncUseWidgetSize = use_widget_size
+        self._asyncFailed = False
+        self._imagePool = get_image_pool()
+        self._imagePool.imageReady.connect(self._onAsyncImageReady)
+        self._imagePool.imageFailed.connect(self._onAsyncImageFailed)
+        self._imageRetryTimer = QTimer(self)
+        self._imageRetryTimer.setSingleShot(True)
+        self._imageRetryTimer.timeout.connect(self._retryAsyncImage)
+
+    def setAsyncImage(self, path):
+        if isinstance(path, QPixmap):
+            self.cancelAsyncImage()
+            if not path.isNull():
+                self._acceptAsyncImage(path.toImage())
+            return
+        path = os.fspath(path) if path else ""
+        dpr = self.devicePixelRatioF()
+        size = (
+            self.size()
+            if self._asyncUseWidgetSize and self.width() > 0 and self.height() > 0
+            else self._asyncTargetSize
+        )
+        key = (
+            f"{self._asyncPrefix}:{path}:{size.width()}:{size.height()}:{dpr:.2f}"
+            if path
+            else None
+        )
+        if path == self._asyncPath and key == self._asyncKey and not self._asyncFailed:
+            return
+        self._imageRetryTimer.stop()
+        self._asyncPath = path or None
+        self._asyncKey = key
+        self._asyncFailed = False
+        self._clearAsyncImage()
+        if self._asyncPath:
+            self._submitAsyncImage()
+
+    def cancelAsyncImage(self):
+        self._imageRetryTimer.stop()
+        self._asyncPath = None
+        self._asyncKey = None
+        self._asyncFailed = False
+        self._clearAsyncImage()
+
+    def _submitAsyncImage(self):
+        if not self._asyncPath or not self._asyncKey:
+            return
+        size = (
+            self.size()
+            if self._asyncUseWidgetSize and self.width() > 0 and self.height() > 0
+            else self._asyncTargetSize
+        )
+        if self._imagePool.submit(
+            self._asyncKey,
+            self._asyncPath,
+            size.width(),
+            size.height(),
+            self.devicePixelRatioF(),
+        ):
+            self._imageRetryTimer.stop()
+        else:
+            self._imageRetryTimer.start(50)
+
+    def _retryAsyncImage(self):
+        self._submitAsyncImage()
+
+    @pyqtSlot(str, QImage)
+    def _onAsyncImageReady(self, key, image):
+        if key != self._asyncKey:
+            return
+        self._imageRetryTimer.stop()
+        self._asyncFailed = False
+        self._acceptAsyncImage(image)
+
+    @pyqtSlot(str, str)
+    def _onAsyncImageFailed(self, key, error):
+        if key != self._asyncKey:
+            return
+        self._imageRetryTimer.stop()
+        self._asyncFailed = True
+        self._clearAsyncImage()
+
+    def _acceptAsyncImage(self, image):
+        raise NotImplementedError
+
+    def _clearAsyncImage(self):
+        raise NotImplementedError
 
 
 class ImagePool(QObject):
@@ -46,10 +141,10 @@ class ImagePool(QObject):
             max(1, int(width * dpr)),
             max(1, int(height * dpr)),
         )
-        self._executor.submit(self._load, key, path, target)
+        self._executor.submit(self._load, key, path, target, dpr)
         return True
 
-    def _load(self, key, path, target):
+    def _load(self, key, path, target, dpr):
         try:
             if not os.path.isfile(path):
                 raise FileNotFoundError(path)
@@ -62,10 +157,12 @@ class ImagePool(QObject):
             source_size = reader.size()
             if source_size.width() * source_size.height() > self.MAX_SOURCE_PIXELS:
                 raise ValueError("image source exceeds pixel budget")
+            target = source_size.scaled(target, Qt.KeepAspectRatio)
             reader.setScaledSize(target)
             image = reader.read()
             if image.isNull():
                 raise ValueError(reader.errorString())
+            image.setDevicePixelRatio(dpr)
 
             self._cache_put(key, image)
             self.imageReady.emit(key, image)

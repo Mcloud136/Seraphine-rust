@@ -8,10 +8,10 @@
 
 <div align="center">
 
-  [![License](https://img.shields.io/github/license/Zzaphkiel/Seraphine?style=flat&label=License)](https://github.com/Zzaphkiel/Seraphine/blob/main/LICENSE)
-  [![Forks](https://img.shields.io/github/forks/Zzaphkiel/Seraphine?style=flat&label=Forks)](https://github.com/Zzaphkiel/Seraphine/forks)
-  [![Stars](https://img.shields.io/github/stars/Zzaphkiel/Seraphine?style=flat&label=Stars)](https://github.com/Zzaphkiel/Seraphine/stargazers)
-  [![Downloads](https://img.shields.io/github/downloads/Zzaphkiel/Seraphine/total?style=flat&label=Downloads)](https://github.com/Zzaphkiel/Seraphine/releases)
+  [![License](https://img.shields.io/github/license/Mcloud136/Seraphine-rust?style=flat&label=License)](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE)
+  [![Forks](https://img.shields.io/github/forks/Mcloud136/Seraphine-rust?style=flat&label=Forks)](https://github.com/Mcloud136/Seraphine-rust/forks)
+  [![Stars](https://img.shields.io/github/stars/Mcloud136/Seraphine-rust?style=flat&label=Stars)](https://github.com/Mcloud136/Seraphine-rust/stargazers)
+  [![Downloads](https://img.shields.io/github/downloads/Mcloud136/Seraphine-rust/total?style=flat&label=Downloads)](https://github.com/Mcloud136/Seraphine-rust/releases)
 
 </div>
 
@@ -24,17 +24,17 @@
 
 ## 快速上手 🤗
 ### 直接使用打包好的程序
-点击[这里](https://github.com/Miuguel/Seraphine/releases/latest)进入发布页面，在下方找到资源中的 `Seraphine.7z`，点击下载并解压至文件夹中，双击运行其中的 `Seraphine.exe` 即可。
+点击[这里](https://github.com/Mcloud136/Seraphine-rust/releases/latest)进入发布页面，在下方找到资源中的 `Seraphine.7z`，点击下载并解压至文件夹中，双击运行其中的 `Seraphine.exe` 即可。
 
 ### 或通过本地构建
 下载项目源码 `zip` 压缩包解压至文件夹或通过 `git`
 ```shell
-git clone https://github.com/Zzaphkiel/Seraphine.git
+git clone https://github.com/Mcloud136/Seraphine-rust.git
 cd Seraphine
 ```
 创建并激活新的 conda 环境
 ```shell
-conda create -n seraphine python=3.8
+conda create -n seraphine python=3.13
 conda activate seraphine
 ```
 安装依赖
@@ -87,7 +87,7 @@ python main.py
 
 ## 常见问题 FAQ 🧐
 ### Q：我会因为使用 Seraphine 而被封号吗 😨？
-由于本程序的功能**完全**基于英雄联盟客户端 API 实现，**不含任何**对客户端以及游戏文件本体、代码以及内存的读取或破坏其完整性的行为（详情见下方[套盾环节](https://github.com/Zzaphkiel/Seraphine?tab=readme-ov-file#%E5%A5%97%E7%9B%BE%E7%8E%AF%E8%8A%82-%EF%B8%8F)）。因此仅使用 Seraphine 时极大概率不会被封号，但**并不保证**一定不会封号。
+由于本程序的功能**完全**基于英雄联盟客户端 API 实现，**不含任何**对客户端以及游戏文件本体、代码以及内存的读取或破坏其完整性的行为（详情见下方[套盾环节](https://github.com/Mcloud136/Seraphine-rust?tab=readme-ov-file#%E5%A5%97%E7%9B%BE%E7%8E%AF%E8%8A%82-%EF%B8%8F)）。因此仅使用 Seraphine 时极大概率不会被封号，但**并不保证**一定不会封号。
 
 ### Q：真的被封号了怎么办？
 申诉或等待解封吧 😭
@@ -103,14 +103,14 @@ Seraphine 提供的战绩查询相关功能的数据均是由英雄联盟客户�
 
 
 ## 帮助我们改进 Seraphine 😘
-在您的使用过程中，如果遇到程序的任何 BUG 或不符合预期的行为，欢迎提出 [issue](https://github.com/Zzaphkiel/Seraphine/issues)。发布 issue 时请按照模板填写。**发布新 issue 前请先善用搜索功能，看看之前是否讨论过相关或类似的问题！**
+在您的使用过程中，如果遇到程序的任何 BUG 或不符合预期的行为，欢迎提出 [issue](https://github.com/Mcloud136/Seraphine-rust/issues)。发布 issue 时请按照模板填写。**发布新 issue 前请先善用搜索功能，看看之前是否讨论过相关或类似的问题！**
 
-如果您有功能上的添加或修改建议，也非常欢迎提出 issue 进行讨论！[PR](https://github.com/Zzaphkiel/Seraphine/pulls) 也大欢迎！
+如果您有功能上的添加或修改建议，也非常欢迎提出 issue 进行讨论！[PR](https://github.com/Mcloud136/Seraphine-rust/pulls) 也大欢迎！
 
 ## 您也可以自己打包可执行文件 📂
 在 `seraphine` 虚拟环境下安装 `Pyinstaller`，并确认环境支持 `7z` 命令
 ```shell
-pip install pyinstaller==5.13
+pip install pyinstaller
 ```
 执行项目中 `make.ps1` 脚本，通过 `-dest` 参数传入目标文件夹
 ``` shell
@@ -128,12 +128,12 @@ Seraphine is not endorsed by Riot Games and does not reflect the views or opinio
 **参考译文**：Seraphine 未经 Riot Games 认可，也不代表 Riot Games 或任何官方参与制作或管理 Riot Games 产品的人的观点或意见。Riot Games 及其所有相关产物均为 Riot Games，Inc 的商标或注册商标。
 
 ## 套盾环节 🛡️
-本程序为在 GitHub 仓库 [Zzaphkiel/Seraphine](https://github.com/Zzaphkiel/Seraphine) 开源的代码，以及在 [Release](https://github.com/Zzaphkiel/Seraphine/releases) 或官方 QQ 群组中上传的二进制文件。本环节旨在让用户更加全面详尽地了解本程序以及可能风险，以便用户在使用本程序前及过程中做出充分的风险评估和明智的决策。
+本程序为在 GitHub 仓库 [Mcloud136/Seraphine-rust](https://github.com/Mcloud136/Seraphine-rust) 开源的代码，以及在 [Release](https://github.com/Mcloud136/Seraphine-rust/releases) 或官方 QQ 群组中上传的二进制文件。本环节旨在让用户更加全面详尽地了解本程序以及可能风险，以便用户在使用本程序前及过程中做出充分的风险评估和明智的决策。
 
 1. 本程序的目的是通过为游戏玩家提供**游戏外**辅助功能，从而给玩家提供更好的游戏体验。我们不鼓励不支持任何违反 Riot 以及腾讯规定或任何可能导致游戏环境不公平的行为。
 2. 本程序的代码实现遵守 [Riot Policies](https://developer.riotgames.com/policies/general) 的规定，提供的功能符合 [《英雄联盟》游戏插件公约](https://lol.qq.com/webplat/info/news_version3/152/4579/4581/m3106/201509/381618.shtml) 的要求。
 3. 本程序是基于 Riot 提供的 League Client Update（LCU）API 开发的工具，其代码与行为均不含任何侵入性的手段，因此在理论上并不会做出任何破坏客户端以及游戏完整性的行为，包括但不限于客户端文件内容的修改或游戏进程内存的读写等。
-4. 我们尽力保证本程序软件本体以及使用时游戏客户端的稳定性，但尽管如此，在具体的游戏环境以及 Riot 或腾讯提供的服务更新的过程中（如反作弊系统或其他保护手段的更新），使用本程序可能会对您的游戏体验产生负面影响，如客户端崩溃（[#158](https://github.com/Zzaphkiel/Seraphine/issues/158)）、账号封禁（[#408](https://github.com/Zzaphkiel/Seraphine/issues/408#issuecomment-2185788008)）等。
+4. 我们尽力保证本程序软件本体以及使用时游戏客户端的稳定性，但尽管如此，在具体的游戏环境以及 Riot 或腾讯提供的服务更新的过程中（如反作弊系统或其他保护手段的更新），使用本程序可能会对您的游戏体验产生负面影响，如客户端崩溃（[#158](https://github.com/Mcloud136/Seraphine-rust/issues/158)）、账号封禁（[#408](https://github.com/Mcloud136/Seraphine-rust/issues/408#issuecomment-2185788008)）等。
 5. 使用本程序所产生的一切后果将由您自行承担，我们不对因使用本程序而产生的任何直接或间接损失负责，用户在决定使用本程序时，应充分考虑并自行承担由此产生的所有风险和后果。
 6. 我们保留随时修改本免责声明的权利，请定期查阅此页面以获取最新信息。
 
@@ -171,16 +171,16 @@ Seraphine is not endorsed by Riot Games and does not reflect the views or opinio
 
 ## 点个 Star 支持我们 ⭐
 <p align='center'>
-  <a href="https://github.com/Zzaphkiel/Seraphine/stargazers">
-    <img src="https://api.star-history.com/svg?repos=Zzaphkiel/Seraphine&type=Date">
+  <a href="https://github.com/Mcloud136/Seraphine-rust/stargazers">
+    <img src="https://api.star-history.com/svg?repos=Mcloud136/Seraphine-rust&type=Date">
   </a>
 </p>
 
 ## 致谢 🥳
 - 感谢所有贡献者对 Seraphine 的开发与维护提供的巨大帮助。
   <p align='center'>
-    <a href="https://github.com/Zzaphkiel/Seraphine/graphs/contributors">
-      <img src="https://contrib.rocks/image?repo=Zzaphkiel/Seraphine">
+    <a href="https://github.com/Mcloud136/Seraphine-rust/graphs/contributors">
+      <img src="https://contrib.rocks/image?repo=Mcloud136/Seraphine-rust">
     </a>
   </p>
 - 感谢 [大乱斗之家](http://www.jddld.com) 为我们提供大乱斗 Buff 信息服务支持。
@@ -190,8 +190,6 @@ Seraphine is not endorsed by Riot Games and does not reflect the views or opinio
   
   <p align='center'>
     <a href="https://www.jetbrains.com.cn/pycharm/">
-      <img src="https://github.com/Zzaphkiel/Seraphine/assets/60383222/cb3abddc-de4d-4198-8eb7-daaf03a6287a">
-    </a>
     PyCharm：适用于数据科学和 Web 开发的 Python IDE
   </p>
 
@@ -201,5 +199,5 @@ Seraphine is not endorsed by Riot Games and does not reflect the views or opinio
   
 
 ## 许可证 ⚖️
-- 对于非商用行为，Seraphine 使用 [GPLv3](https://github.com/Zzaphkiel/Seraphine/blob/main/LICENSE) 许可证。
+- 对于非商用行为，Seraphine 使用 [GPLv3](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE) 许可证。
 - 禁止一切针对代码以及二进制文件的商用行为。

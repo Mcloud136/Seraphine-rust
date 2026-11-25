@@ -2,6 +2,7 @@ use seraphine_protocol::{decode, decode_length_prefix, encode, Message, MessageK
 use serde_json::json;
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Sidecar {
     child: Child,
@@ -79,4 +80,56 @@ fn stdio_handshake_health_ping_and_shutdown() {
     sidecar.send(&Message::shutdown());
     sidecar.child.wait().unwrap();
     assert!(sidecar.child.try_wait().unwrap().is_some());
+}
+
+#[test]
+fn asset_failures_are_negative_cached() {
+    let mut sidecar = Sidecar::start();
+    assert_eq!(sidecar.receive().kind, MessageKind::Hello);
+    let unique = format!(
+        "seraphine-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    let args = json!({
+        "folder": unique,
+        "name": "missing.png",
+        "path": "/lol-game-data/assets/v1/missing.png",
+        "maxBytes": 1024,
+        "force": true,
+    });
+
+    sidecar.send(&Message::request(
+        1,
+        0,
+        "asset.get",
+        args.clone(),
+        Some(1000),
+    ));
+    let first = sidecar.receive();
+    assert_eq!(first.error.as_ref().unwrap().code, "NotConnected");
+
+    sidecar.send(&Message::request(2, 0, "asset.get", args, Some(1000)));
+    let second = sidecar.receive();
+    assert_eq!(second.error.as_ref().unwrap().code, "AssetDeferred");
+
+    sidecar.send(&Message::request(
+        3,
+        0,
+        "diagnostics",
+        json!({}),
+        Some(1000),
+    ));
+    let diagnostics = sidecar.receive();
+    let asset_cache = &diagnostics.data.unwrap()["assetCache"];
+    assert_eq!(asset_cache["failures"], 1);
+    assert_eq!(asset_cache["negativeHits"], 1);
+    assert_eq!(asset_cache["negativeEntries"], 1);
+    assert_eq!(asset_cache["inflight"], 0);
+
+    sidecar.send(&Message::shutdown());
+    sidecar.child.wait().unwrap();
 }

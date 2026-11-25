@@ -7,7 +7,7 @@ import asyncio
 from PyQt5.QtCore import QObject
 
 from .exceptions import SummonerRankInfoNotFound
-from ..common.config import cfg, Language
+from ..common.config import cfg, Language, get_effective_language
 from ..lol.connector import connector
 from ..common.signals import signalBus
 
@@ -96,7 +96,7 @@ def translateTier(orig: str, short=False) -> str:
     index = 1 if short else 0
 
     # 只有中文才需要翻译段位名
-    if cfg.language.value == Language.CHINESE_SIMPLIFIED:
+    if get_effective_language() == Language.CHINESE_SIMPLIFIED:
         return maps[orig.capitalize()][index]
     else:
         return orig.capitalize()

@@ -5,9 +5,12 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, WAIT_TIMEOUT};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    CreateFileW, MoveFileExW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_NONE, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH, OPEN_ALWAYS,
 };
 use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -97,6 +100,47 @@ pub fn list_league_client_pids() -> Result<Vec<u32>, PlatformError> {
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+struct FileLockHandle(*mut c_void);
+
+impl Drop for FileLockHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+pub struct FileLock {
+    _handle: FileLockHandle,
+}
+
+pub fn lock_file(path: &Path) -> io::Result<FileLock> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let path = wide_path(path);
+    for _ in 0..100 {
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_NONE,
+                std::ptr::null_mut(),
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            return Ok(FileLock {
+                _handle: FileLockHandle(handle),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(io::Error::last_os_error())
 }
 
 pub fn atomic_replace_file(temporary: &Path, destination: &Path) -> io::Result<()> {
@@ -300,6 +344,37 @@ mod tests {
         atomic_replace_file(&temporary, &destination).unwrap();
         assert_eq!(std::fs::read(&destination).unwrap(), b"new");
         assert!(!temporary.exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn file_lock_excludes_other_processes_until_released() {
+        let directory = std::env::temp_dir().join(format!(
+            "seraphine-file-lock-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.lock");
+        let first = lock_file(&path).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = lock_file(&worker_path);
+            let _ = sender.send((result.is_ok(), started.elapsed()));
+        });
+        assert!(receiver
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err());
+        drop(first);
+        let (acquired, _) = receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(acquired);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -1,11 +1,11 @@
-from PyQt5.QtCore import Qt, QRect, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import Qt, QRect, QSize
 from PyQt5.QtGui import QPainter, QImage, QBrush, QColor
 
-from ..backend.image_pool import get_image_pool
+from ..backend.image_pool import AsyncImageMixin
 from ..common.qfluentwidgets import NavigationWidget, isDarkTheme
 
 
-class NavigationAvatarWidget(NavigationWidget):
+class NavigationAvatarWidget(AsyncImageMixin, NavigationWidget):
     """Avatar widget"""
 
     def __init__(self, avatar: str, name: str, parent=None):
@@ -13,21 +13,18 @@ class NavigationAvatarWidget(NavigationWidget):
 
         self.name = name
         self._avatar = QImage()
-        self._avatarKey = None
-        self._imagePool = get_image_pool()
-        self._imagePool.imageReady.connect(self._onImageReady)
+        self._initAsyncImage("navigation-avatar", target_size=QSize(24, 24))
         self.setAvatar(avatar)
 
     def setAvatar(self, path):
-        dpr = self.devicePixelRatioF()
-        self._avatarKey = f"navigation-avatar:{path}:{dpr:.2f}"
-        self._imagePool.submit(self._avatarKey, path, 24, 24, dpr)
+        self.setAsyncImage(path)
 
-    @pyqtSlot(str, QImage)
-    def _onImageReady(self, key, image):
-        if key != self._avatarKey:
-            return
+    def _acceptAsyncImage(self, image):
         self._avatar = image
+        self.update()
+
+    def _clearAsyncImage(self):
+        self._avatar = QImage()
         self.update()
 
     def paintEvent(self, e):

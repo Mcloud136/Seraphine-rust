@@ -1,9 +1,11 @@
 import asyncio
 import subprocess
+from collections import deque
 from pathlib import Path
 from urllib.parse import quote
 
 from app.common.signals import signalBus
+from app.lol.match_history import extract_match_history_games
 
 from .cache_paths import ensure_cache_root
 from .catalog import CatalogManager
@@ -19,6 +21,7 @@ class SidecarConnector:
         self.server = ""
         self.manager = None
         self.event_task = None
+        self.callStack = deque(maxlen=10)
 
     @property
     def token(self):
@@ -102,6 +105,7 @@ class SidecarConnector:
             "rune icons",
             f"{runeId}.png",
             path=self.manager.getRuneIconPath(runeId),
+            max_bytes=512 * 1024,
         )
 
     async def getProfileIcon(self, iconId):
@@ -109,6 +113,7 @@ class SidecarConnector:
             "profile icons",
             f"{iconId}.jpg",
             path=self.manager.getSummonerProfileIconPath(iconId),
+            max_bytes=512 * 1024,
         )
 
     async def getItemIcon(self, itemId):
@@ -118,6 +123,7 @@ class SidecarConnector:
             "item icons",
             f"{itemId}.png",
             path=self.manager.getItemIconPath(itemId),
+            max_bytes=512 * 1024,
         )
 
     async def getAugmentIcon(self, augmentId):
@@ -125,6 +131,7 @@ class SidecarConnector:
             "augment icons",
             f"{augmentId}.png",
             path=self.manager.getAugmentsIconPath(augmentId),
+            max_bytes=512 * 1024,
         )
 
     async def getChampionSplashes(self, skinInfo, isCentered):
@@ -143,6 +150,7 @@ class SidecarConnector:
             "summoner spell icons",
             f"{spellId}.png",
             path=self.manager.getSummonerSpellIconPath(spellId),
+            max_bytes=512 * 1024,
         )
 
     async def getChampionIcon(self, championId):
@@ -152,6 +160,7 @@ class SidecarConnector:
             "champion icons",
             f"{championId}.png",
             path=self.manager.getChampionIconPath(championId),
+            max_bytes=512 * 1024,
         )
 
     async def getCurrentSummoner(self):
@@ -199,7 +208,7 @@ class SidecarConnector:
         )
         if "games" not in result:
             raise SummonerGamesNotFound()
-        return result["games"]
+        return extract_match_history_games(result)
 
     async def getSummonerGamesByPuuidSlowly(
         self, puuid, begIndex=0, endIndex=4
@@ -215,7 +224,7 @@ class SidecarConnector:
         )
         if "games" not in result:
             raise SummonerGamesNotFound()
-        return result["games"]
+        return extract_match_history_games(result)
 
     async def getGameDetailByGameId(self, gameId):
         return await self.client.lcu_get(

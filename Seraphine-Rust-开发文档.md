@@ -1,10 +1,10 @@
 # Seraphine Rust Sidecar 设计与开发进度文档
 
-- 文档日期：2026-11-25
+- 文档日期：2026-11-26
 - 项目状态：开发中，未达到默认切换与发布条件
 - 当前默认后端：`python`
 - 目标部署：`Seraphine.exe`（PyQt UI）+ `seraphine-sidecar.exe`（Rust）
-- 适用范围：Windows 10 1809+ / Windows 11 x64，Python 3.8
+- 适用范围：Windows 10 1809+ / Windows 11 x64，Python 3.13
 
 ---
 
@@ -220,15 +220,21 @@ tests/
 
 - 完整 Cargo workspace 与 release profile。
 - 匿名 stdio IPC、能力协商、epoch 和心跳。
+- 独立 stdout writer，128 条消息与 4 MiB 在途字节双重有界队列，保持帧顺序并提供慢消费者背压。
+- 最多 64 个请求任务、8 个只读并发槽和单控制槽；支持 cancel、deadline、请求代次与 WS 连接代次隔离，写开始后不可中止。
+- stdin 使用持久帧缓冲，`select!` 取消轮询时不会丢失半帧或串帧。
 - 直接 Windows API 进程枚举与 PEB 命令行读取。
-- LCU/SGP/External/Asset 四类隔离 HTTP 客户端。
+- LCU/SGP/External/Asset 四类隔离 HTTP 客户端；SGP 401 互斥刷新 entitlement token 一次，单次 RPC 对 429/5xx/网络错误最多安全重试一次。
 - WAMP WebSocket、重连缓冲、REST 快照和序列去重。
-- Catalog 紧凑快照与 Python manager 兼容。
+- Catalog 紧凑快照与 Python manager 兼容，Catalog 与社区缓存均改为原子替换。
 - LCU TTL/in-flight 缓存和缓存指标。
+- Asset 原子写入、按目标/来源/字节预算合并、30 秒负缓存和缓存指标；OP.GG 图标复用同一路径。
 - OP.GG 解析、图标落地、请求合并与字节预算缓存。
 - ARAM/ChampionAlias 解析、原子缓存和旧缓存回退。
 - 游戏状态感知 P0–P4 资源调度。
-- 自动化 dry-run、写前守卫、写后确认和台账。
+- 自动化 dry-run、写前守卫、写后确认和台账；真实写台账按 PID/epoch/session/action/type/configRevision/operationId 作用域化，并使用请求指纹拒绝冲突复用。
+- HTTP 写失败后先读回确认；确认成功记 Completed，否则记 OutcomeUnknown；未知结果重放不会再次发写。
+- 写守卫以 PID+operationId 和请求 SHA256 哈希脱敏持久化到 `%APPDATA%/Seraphine/write-guards.json`；文件锁内原子 claim，多实例合并且不覆盖未知状态，重启后仍保持封锁。
 - 固定桶 p50/p95/p99、请求速率、错误率、缓存命中/合并指标。
 - 原生 SHA256 更新器、备份、回滚和自更新 finalizer。
 
@@ -240,7 +246,7 @@ tests/
 - CatalogManager 的 `getPerkStyles()` 已构建完整 style/slot schema。
 - OP.GG sidecar 模式切换到 `RustOpgg`。
 - ARAM/别名在 sidecar 模式使用 Rust 数据。
-- QImage 有界后台解码池。
+- QImage 有界后台解码池，所有运行时图片路径统一异步解码；key 变化、失败、文本切换和清空时移除旧图并拒绝过期结果。
 - 搜索页首屏 20 局，后续按需每次 10 局。
 - 搜索筛选每次最多额外预取两批。
 - 搜索详情和生涯刷新加入世代号保护。
@@ -251,15 +257,18 @@ tests/
 
 ### 7.3 测试与工具
 
-- Rust 工作区测试。
-- Python 3.8 契约测试。
+- Rust 工作区测试，含 Asset 原子写、合并、负缓存和真实 stdio 回归。
+- Python 3.13 契约测试。
 - Qt offscreen 分页 UI 测试。
+- Qt offscreen 图片回归测试：异步解码、DPR、缓存复用、key 切换清理、失败清理和过期结果拒绝。
 - Windows Toolhelp/PEB 测试。
 - 更新器安装、失败回滚和自更新测试。
 - 真实 LCU Golden Diff。
+- 本地 HTTPS 模拟 LCU 写安全回归：HTTP 500 后读回确认、operationId 冲突、跨会话封锁、OutcomeUnknown 重放和非法路径拒绝。
 - sidecar 崩溃后自动重连和 epoch 递增验证。
 - sidecar CPU/内存/延迟基准。
 - PresentMon QPC 关联分析脚本。
+- `tests/bench/package_smoke.py`：manifest 路径/大小/SHA256、`--version`、包内 sidecar 握手，以及真实 Windows UI 必须写入 `Seraphine initialized` 启动完成标记。
 
 ---
 
@@ -267,52 +276,65 @@ tests/
 
 ### P0：发布阻断
 
-1. **PyInstaller 整包实跑未完成。**
-   - 两个 Rust exe 已能发布构建。
-   - `make.ps1` 已修复并生成 SHA256 清单。
-   - 仍需验证完整 `Seraphine.7z`、安装、更新和回滚。
-
-2. **真实游戏帧时间验收未完成。**
+1. **真实游戏帧时间验收未完成。**
    - 尚未在 Intel 250KF 上完成 PresentMon/WPR A/B/C。
    - 不能证明游戏内 P95/P99 帧时间和卡顿次数达标。
 
-3. **完整 sidecar UI 灰度未完成。**
+2. **完整 sidecar UI 灰度未完成。**
    - 默认仍为 Python。
-   - 需要实际客户端中验证 Career、Search、GameInfo、OP.GG、TFT、ARAM 和多客户端切换。
+   - 默认 Python 后端已在真实客户端验证 Career、Search、GameInfo、设置、辅助功能和 OP.GG；sidecar 已通过 LCU Golden Diff、生涯/搜索及 OP.GG 兼容层实测，但高并发对局详情期间仍出现连接恢复与 pending 背压问题。
+   - 仍需实际客户端中完成 sidecar 的 TFT、ARAM、多客户端切换和完整英雄选择/对局流程稳定性验收。
 
 ### P1：功能与并发
 
-1. sidecar 请求仍基本串行；deadline、取消、独立 writer 和完整有界请求调度仍需完善。
-2. SGP 401 刷新一次和安全读取重试策略仍需完善。
-3. 写台账键仍需按 PID/epoch/session/action/type/configRevision 完整作用域化。
-4. HTTP 错误在读回前不应简单记为最终失败。
-5. Asset 写入仍需全面改为原子替换，并补齐 in-flight 去重和 30 秒负缓存。
-6. 图片 key 变化或加载失败时需要清理旧图标，剩余同步解码路径需要继续迁移。
-7. ARAM 上游当前返回 503，HTTPS 证书也不可用；Rust 已能回退旧缓存，但真实源恢复前无法验收新数据。
+1. ARAM 上游当前返回 503，HTTPS 证书也不可用；Rust 已能回退旧缓存，但真实源恢复前无法验收新数据。
 
 ### P2：性能与维护
 
-1. 首次外部 TLS + 别名加载后 Working Set 约 10.65 MiB，超过 10 MiB 目标。
-2. 10 分钟空闲基准曾因后台 sidecar 退出而无效；60 秒空闲复测稳定，但不能替代 10 分钟验收。
-3. 旧 Python 网络和解析实现尚未删除。
-4. 多服 fixture、429/5xx/超时/token 轮换等完整 mock 覆盖仍需补齐。
-5. Authenticode 签名尚未配置。
-6. GitHub Dependabot 在提交 `34db97a` 报告 57 个依赖告警（14 high、27 moderate、16 low）；发布前需使用 `cargo audit`/`pip-audit` 分级处理。
+1. 旧 Python 网络和解析实现尚未删除。
+2. 多服 fixture、429/5xx/超时/token 轮换等完整 mock 覆盖仍需补齐。
+3. Authenticode 签名尚未配置。
+4. 持久化写守卫上限为 512 条，达到上限后拒绝新写而不自动淘汰，需设计安全清理或归档策略。
 
 ---
 
 ## 9. 已验证数据
 
-- Rust：37 项测试通过。
-- Python：36 项通过，1 项真实 LCU 测试在未设置环境变量时跳过。
-- Clippy：`-D warnings` 通过。
+- Rust：65 项测试通过（2026-11-26 Visual Studio 2026 18.12.1、MSVC 19.52.37029 / 工具集 14.52、`x86_64-pc-windows-msvc` 实跑）。
+- Python：61 项契约测试全部通过，1 项真实 LCU 测试在未设置环境变量时跳过（MSVC release sidecar/updater 参与）。
+- Clippy：`-D warnings` 通过（Visual Studio 2026 MSVC 工具链）。
 - Rust 格式检查通过。
 - 真实 LCU Golden Diff 通过。
 - sidecar 崩溃后自动重连通过，epoch 从 1 递增到 2。
-- 60 秒空闲：CPU 平均约 0.026%，Working Set 约 6.43 MiB，Private 约 0.84 MiB。
-- 20 req/s 短测无错误。
+- MSVC release 首次外部 TLS + 别名加载：基线 Working Set 4.98 MiB，别名刷新后 9.64 MiB，外网 Asset 下载后 9.85 MiB，达到 10 MiB 目标。
+- MSVC release 10 分钟空闲：零错误、进程未退出，CPU 平均约 0.008%，Working Set 平均/最大约 4.99/5.06 MiB，Private 平均约 0.85 MiB。
+- MSVC release 60 秒空闲：CPU 平均约 0.026%，Working Set 约 4.98 MiB，Private 约 0.89 MiB。
+- MSVC release 20 req/s 短测：400 次请求零错误，延迟 P50/P95/P99 约 0.253/0.310/0.352 ms，Working Set 约 5.04 MiB。
 - 真实英雄别名源返回 173 个英雄。
 - 更新器自替换 finalizer 通过发布版回归测试。
+- 2026-11-25 本机 Qt offscreen 图片回归 6/6 通过，8 个真实图片控件加载/切换/失败清理冒烟通过。
+- 2026-11-25 本机完整 Python 契约 50 项全部通过（1 项真实 LCU 按条件跳过）。
+- 2026-11-25 本地 HTTPS 模拟 LCU 写安全回归 2/2 通过，真实 release sidecar 参与；覆盖跨重启完成重放、未知写封锁、文件锁、多实例合并和单 operation 原子 claim。
+- 2026-11-25 真实 release sidecar 外网 Asset 下载 102,339 字节并命中磁盘缓存，失败负缓存 stdio 回归通过。
+- 2026-11-25 SGP 本地 mock 回归通过：503 重试一次，400/401/JSON 错误不普通重试，401 token 刷新与旧事件防护通过。
+- 2026-11-25 独立 IPC writer 回归通过：帧顺序、4 MiB 字节背压、真实 release 子进程握手/心跳/关闭均通过。
+- 2026-11-25 IPC 请求并发回归通过：slow/fast 并发、8 读槽有界、64 pending 上限、cancel、deadline、写开始后不可中止及请求/WS 代次隔离。
+- 2026-11-25 stdin 持久帧缓冲回归通过：轮询取消后半帧仍可正确解析，连续帧不串包。
+- 2026-11-25 Python 3.13/GNU 预备整包通过：PyInstaller 6.22.3、501 文件 manifest、7z 归档、包内 sidecar 握手和真实 Windows UI 存活；真实 updater 恢复与损坏源拒绝通过。
+- 2026-11-26 Visual Studio 2026/MSVC 最终整包通过：PyInstaller 6.22.3、503 个归档条目、501 文件 manifest、37 MiB 7z；包内 `--version`、sidecar 握手和真实 Windows UI 启动完成标记通过。
+- 2026-11-26 修复首屏卡死：托盘菜单父参数兼容 PyQt-Fluent-Widgets 1.11.3，信号先于监听线程连接，启动异常时关闭首屏；隔离环境整包启动回归通过。
+- 2026-11-26 真实客户端默认 Python 后端 UI 验证通过：大厅/游戏中标题、Career 20 局统计与历史、Search 实时十人对局详情、Game Information 友敌分区、辅助功能、设置和 OP.GG 16.23 极地大乱斗梯队数据。
+- 2026-11-26 适配真实 LCU 新版对局历史结构，同时兼容旧版列表；Python 与 sidecar 契约测试覆盖两种结构。
+- 2026-11-26 更新、关于、反馈、README 和 issue 模板统一指向 `https://github.com/Mcloud136/Seraphine-rust`，更新检查改用 HTTPS GitHub API。
+- 2026-11-26 修复设置与辅助卡片正文标签未继承 Fluent 14 px 字体的问题；真实窗口诊断中 LCU 并发标签宽度由 21 px 恢复为 98 px，自动交换、延迟、默认英雄/技能等标签均恢复正常，头部冗余状态文本不再显示。
+- 2026-11-26 新增“游戏中自动静默到托盘”开关并启用当前配置；真实 `InProgress` 状态下 Seraphine 主窗口与 OP.GG 窗口均为不可见，托盘图标仍可恢复。
+- 2026-11-26 sidecar OP.GG 梯队列表改为紧凑占位符并在 Python 侧解析，单个反 Counter 限制为 UI 可见的 3 个；实测 ARAM 响应约 45 KiB、全位置排位约 149 KiB。
+- 2026-11-26 sidecar pending 请求达到 64 时改为有界等待；写禁用和瞬时协议错误不再触发整程序退出。
+- 2026-11-26 TFT 真实对局历史接口返回 1 局，Python 与 sidecar 结构一致，仅进行中对局的 `time_eliminated` 动态字段不同；ARAM 当前无 appsecret/本地缓存，真实源仍受上游阻断。
+- 2026-11-26 修复自动语言检测：`Language.AUTO` 现在按系统语言选择中文、英文或葡萄牙文；`Ranked TFT` 补充为“云顶之弈排位”，`Howling Abyss` 在中文系统下显示为“嚎哭深渊”，包内 `.qm` 翻译已验证。
+- 最终 MSVC 包 SHA256：`0d12207abc30f2eb115e37eaf7c6cd0c98cd3e3309e01752febd0287f2c6dde5`。
+- 2026-11-25 `cargo audit` 扫描 155 个 Rust 依赖无已知漏洞；Python 3.13.17 环境下 `pip-audit` 无已知漏洞，依赖版本固定在 `requirements.txt`。
+- MSVC 编译与整包结果不替代真实游戏、完整 sidecar UI 灰度和政策验收。
 
 上述数据不等于最终发布验收。
 
@@ -338,7 +360,7 @@ SERAPHINE_ENABLE_LCU_WRITES=1
 
 ### 10.3 Rust 构建
 
-在已初始化 MSVC x64 开发环境的终端中：
+在 Visual Studio 2026 Build Tools 的 x64 Native Tools 命令提示符中，或已加载对应 `vcvars64.bat` 的终端内：
 
 ```powershell
 cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
@@ -357,7 +379,17 @@ $env:QT_QPA_PLATFORM = "offscreen"
 python -m unittest discover -s tests/contract -v
 ```
 
-### 10.5 回滚
+### 10.5 整包验证
+
+生成最终包并解压到独立目录后，在仓库根目录执行：
+
+```powershell
+python -m tests.bench.package_smoke .\dist\Seraphine
+```
+
+该命令会校验 manifest、版本、包内 sidecar 握手，并启动真实 Windows UI 等待 `Seraphine initialized` 标记；卡首屏或启动异常会判定失败。无桌面环境时可用 `--skip-ui`，但这不能替代实机 UI 验收。
+
+### 10.6 回滚
 
 - 配置层：将 `BackendMode` 切回 `python` 或 `shadow`。
 - 整包层：使用上一个发布版本。
@@ -375,7 +407,7 @@ python -m unittest discover -s tests/contract -v
 - `.git/`、`rust/target/`、`spike/winui3-rust/target/`。
 - `build/`、`dist/`、`__pycache__/`、虚拟环境。
 - `app/resource/game/` 运行时图片缓存。
-- `config.json`、日志、`shadow_diff.jsonl`、运行时 Catalog/ARAM/Alias JSON。
+- `config.json`、日志、`shadow_diff.jsonl`、运行时 Catalog/ARAM/Alias JSON、`write-guards.json`/`write-guards.lock`。
 - `.env`、私钥、证书、PFX/P12。
 - 编译生成的 exe/dll/pyd/7z/zip。
 - 本地用户名、绝对路径、PUUID、召唤师 ID 和真实 token。
@@ -385,16 +417,12 @@ python -m unittest discover -s tests/contract -v
 
 ## 12. 下一步建议顺序
 
-1. 完成 PyInstaller 整包安装、更新、回滚验证。
-2. 完成 sidecar 模式完整 UI 灰度。
-3. 完成 Intel 250KF PresentMon/WPR 真实游戏 A/B/C。
-4. 将首次外部 TLS 场景 Working Set 降至 10 MiB 以下。
-5. 完善 IPC 并发、取消、deadline 和独立 writer。
-6. 完善 SGP 401 刷新、安全重试和完整写台账作用域。
-7. 等待 ARAM 上游恢复并完成真实源 Golden Diff。
-8. 完成政策审批后再评估真实写入。
-9. 全部硬门槛通过后观察 7 天，再切换默认后端。
-10. 最后清理旧 Python 网络/解析实现。
+1. 完成 sidecar 模式完整 UI 灰度。
+2. 完成 Intel 250KF PresentMon/WPR 真实游戏 A/B/C。
+3. 等待 ARAM 上游恢复并完成真实源 Golden Diff。
+4. 完成政策审批后再评估真实写入。
+5. 全部硬门槛通过后观察 7 天，再切换默认后端。
+6. 最后清理旧 Python 网络/解析实现。
 
 ---
 
@@ -412,9 +440,9 @@ python -m unittest discover -s tests/contract -v
 ### 13.2 开发环境
 
 - Windows 10/11 x64。
-- Python 3.8。
+- Python 3.13（当前实机 3.13.17）；运行依赖固定在 `requirements.txt`，打包使用 PyInstaller 6.22.3。
 - Rust stable x86_64-pc-windows-msvc。
-- Visual Studio Build Tools，包含 MSVC 和 Windows SDK。
+- Visual Studio 2026 Build Tools，包含 C++ Build Tools core、最新 MSVC x64/x86 与当前 Windows 11 SDK；无需安装 IDE、CMake 或 vcpkg 推荐项。
 - 不需要安装 WinUI 3 才能完成当前 sidecar 路线。
 - spike 目录只用于历史技术验证，不应作为主程序依赖。
 
@@ -431,7 +459,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 python -m unittest discover -s tests/contract -v
 ```
 
-预期：Rust 37 项通过；Python 36 项通过、1 项真实 LCU 测试在未配置环境变量时跳过。
+预期：Rust 65 项通过；Python 61 项通过、1 项真实 LCU 测试在未配置环境变量时跳过。
 
 ### 13.4 修改约束
 
@@ -445,9 +473,7 @@ python -m unittest discover -s tests/contract -v
 ### 13.5 当前最优先工作
 
 1. 修复并验证 PyInstaller 整包。
-2. 完善 sidecar IPC 并发、取消、deadline 和独立 writer。
-3. 完善 SGP 401 刷新、安全重试与写台账完整作用域。
-4. 完成 sidecar 模式完整 UI 灰度。
-5. 完成真实游戏 PresentMon/WPR 验收和外部 TLS 内存优化。
+2. 完成 sidecar 模式完整 UI 灰度。
+3. 完成真实游戏 PresentMon/WPR 验收和外部 TLS 内存优化。
 
 在这些工作完成前，不要把默认后端从 `python` 切换为 `sidecar`，不要启用真实 LCU 写入。

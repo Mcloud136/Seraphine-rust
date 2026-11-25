@@ -14,11 +14,12 @@ import aiohttp
 import requests
 from PyQt5.QtCore import QObject
 
-from app.common.config import cfg, Language
+from app.common.config import cfg, Language, get_effective_language
 from app.common.logger import logger
 from app.common.signals import signalBus
 from app.common.util import getPortTokenServerByPid, getTasklistPath, getLolClientPid
 from app.lol.exceptions import *
+from app.lol.match_history import extract_match_history_games
 
 requests.packages.urllib3.disable_warnings()
 
@@ -610,7 +611,7 @@ class LolClientConnector(QObject):
         if "games" not in res:
             raise SummonerGamesNotFound()
 
-        return res["games"]
+        return extract_match_history_games(res)
 
     @retry()
     async def getSummonerGamesByPuuid(self, puuid, begIndex=0, endIndex=4):
@@ -637,7 +638,7 @@ class LolClientConnector(QObject):
         if "games" not in res:
             raise SummonerGamesNotFound()
 
-        return res["games"]
+        return extract_match_history_games(res)
 
     @retry()
     async def getTftGamesByPuuid(self, puuid, count=20):
@@ -663,7 +664,7 @@ class LolClientConnector(QObject):
         if "games" not in res:
             raise SummonerGamesNotFound()
 
-        return res["games"]
+        return extract_match_history_games(res)
 
     @retry()
     async def getGameDetailByGameId(self, gameId):
@@ -1403,18 +1404,16 @@ class JsonManager:
         }
 
         key = mapId if mapId in maps else -1
-        # Map names are in English for every language except explicit
-        # Chinese -- this also covers Language.AUTO, which most users
-        # (including non-Chinese system locales) leave selected by default.
-        index = 0 if cfg.language.value == Language.CHINESE_SIMPLIFIED else 1
+        index = 0 if get_effective_language() == Language.CHINESE_SIMPLIFIED else 1
 
         return maps[key][index]
 
     def getNameMapByQueueId(self, queueId):
+        language = get_effective_language()
         if queueId == 0:
             return {
-                "name": "Custom" if cfg.language.value == Language.ENGLISH else 
-                       "Personalizado" if cfg.language.value == Language.PORTUGUESE else 
+                "name": "Custom" if language == Language.ENGLISH else
+                       "Personalizado" if language == Language.PORTUGUESE else
                        "自定义"
             }
 
@@ -1427,13 +1426,13 @@ class JsonManager:
             
             if name in translate:
                 if isinstance(translate[name], dict):
-                    if cfg.language.value == Language.ENGLISH:
+                    if language == Language.ENGLISH:
                         name = translate[name]["en"]
-                    elif cfg.language.value == Language.PORTUGUESE:
+                    elif language == Language.PORTUGUESE:
                         name = translate[name]["pt"]
                 else:
                     # Handle old format for backward compatibility
-                    if cfg.language.value == Language.ENGLISH:
+                    if language == Language.ENGLISH:
                         name = translate[name]
 
         map = self.getMapNameById(mapId)

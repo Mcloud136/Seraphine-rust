@@ -1,5 +1,8 @@
 #![windows_subsystem = "windows"]
 
+mod asset_cache;
+
+use asset_cache::{AssetCache, AssetFlight, AssetStart};
 use seraphine_automation::write_guard::{confirm_write, validate_write};
 use seraphine_automation::{AutomationState, DryRunAutomation};
 use seraphine_domain::catalog::CatalogBuilder;
@@ -16,27 +19,30 @@ use seraphine_lcu::websocket::{
     run_websocket, LcuEvent, WsStats, CHAMP_SELECT_TOPIC, ENTITLEMENT_TOPIC, GAMEFLOW_TOPIC,
     SUMMONER_TOPIC,
 };
-use seraphine_lcu::{AssetClient, ConnectionInfo, ExternalClient, LcuClient, SgpClient};
+use seraphine_lcu::{
+    should_retry_sgp, AssetClient, ConnectionInfo, ExternalClient, LcuClient, LcuError, SgpClient,
+};
 use seraphine_platform::{
     atomic_replace_file, current_process_memory, list_league_client_pids, list_processes,
-    read_process_command_line,
+    lock_file, read_process_command_line,
 };
 use seraphine_protocol::{
     decode, decode_length_prefix, encode, Message, MessageKind, Metrics, RpcError, MAX_EVENT_QUEUE,
-    PROTOCOL_VERSION,
+    MAX_IPC_INFLIGHT_BYTES, MAX_PENDING_REQUESTS, PROTOCOL_VERSION,
 };
 use seraphine_resource_scheduler::{GameState, Priority, ResourceScheduler};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::sync::{mpsc, Mutex, OwnedSemaphorePermit, Semaphore};
 use zeroize::Zeroizing;
 
 mod capabilities {
@@ -97,6 +103,401 @@ impl ChampionAliasCache {
     }
 }
 
+static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Debug)]
+enum AssetSource {
+    Lcu(String),
+    External(String),
+}
+
+impl AssetSource {
+    fn cache_key(&self, destination: &Path, max_bytes: usize) -> String {
+        let source = match self {
+            Self::Lcu(path) => format!("lcu:{path}"),
+            Self::External(url) => format!("url:{url}"),
+        };
+        format!("{}\0{source}\0{max_bytes}", destination.to_string_lossy())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct WriteLedgerKey {
+    pid: u32,
+    epoch: u64,
+    session_id: String,
+    action_id: u64,
+    action_type: String,
+    config_revision: u64,
+    operation_id: String,
+}
+
+struct WriteLedgerEntry {
+    request_hash: [u8; 32],
+    state: AutomationState,
+}
+
+fn write_request_hash(method: &str, path: &str, data: Option<&Value>) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(method.as_bytes());
+    hasher.update([0]);
+    hasher.update(path.as_bytes());
+    hasher.update([0]);
+    hasher.update([u8::from(data.is_some())]);
+    if let Some(data) = data {
+        if let Ok(payload) = serde_json::to_vec(data) {
+            hasher.update(payload);
+        }
+    }
+    hasher.finalize().into()
+}
+
+const MAX_PERSISTED_WRITE_GUARDS: usize = 512;
+const MAX_WRITE_GUARD_BYTES: u64 = 256 * 1024;
+
+#[derive(Clone, Copy)]
+struct PersistedWriteGuard {
+    request_hash: [u8; 32],
+    completed: bool,
+}
+
+fn hex_encode(bytes: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut result = String::with_capacity(64);
+    for byte in bytes {
+        result.push(HEX[(byte >> 4) as usize] as char);
+        result.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    result
+}
+
+fn hex_decode(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 {
+        return None;
+    }
+    let mut result = [0_u8; 32];
+    let bytes = value.as_bytes();
+    for index in 0..32 {
+        let high = (bytes[index * 2] as char).to_digit(16)?;
+        let low = (bytes[index * 2 + 1] as char).to_digit(16)?;
+        result[index] = ((high << 4) | low) as u8;
+    }
+    Some(result)
+}
+
+fn operation_guard_key(pid: u32, operation_id: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(pid.to_le_bytes());
+    hasher.update([0]);
+    hasher.update(operation_id.as_bytes());
+    hex_encode(&hasher.finalize().into())
+}
+
+fn load_write_guards(path: &Path) -> (HashMap<String, PersistedWriteGuard>, Option<&'static str>) {
+    let length = match fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (HashMap::new(), None),
+        Err(_) => {
+            return (
+                HashMap::new(),
+                Some("persistent write guards are unavailable"),
+            )
+        }
+    };
+    if length == 0 || length > MAX_WRITE_GUARD_BYTES {
+        return (HashMap::new(), Some("persistent write guards are invalid"));
+    }
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                HashMap::new(),
+                Some("persistent write guards are unavailable"),
+            )
+        }
+    };
+    let value: Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => return (HashMap::new(), Some("persistent write guards are invalid")),
+    };
+    if value.get("version").and_then(Value::as_u64) != Some(1) {
+        return (HashMap::new(), Some("persistent write guards are invalid"));
+    }
+    let Some(entries) = value.get("entries").and_then(Value::as_array) else {
+        return (HashMap::new(), Some("persistent write guards are invalid"));
+    };
+    if entries.len() > MAX_PERSISTED_WRITE_GUARDS {
+        return (HashMap::new(), Some("persistent write guards are invalid"));
+    }
+    let mut guards = HashMap::new();
+    for entry in entries {
+        let operation = entry
+            .get("operation")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let request_hash = entry
+            .get("requestHash")
+            .and_then(Value::as_str)
+            .and_then(hex_decode);
+        let completed = match entry.get("state").and_then(Value::as_str) {
+            Some("completed") => true,
+            Some("outcome_unknown") => false,
+            _ => return (HashMap::new(), Some("persistent write guards are invalid")),
+        };
+        if operation.len() != 64 || hex_decode(operation).is_none() {
+            return (HashMap::new(), Some("persistent write guards are invalid"));
+        }
+        let Some(request_hash) = request_hash else {
+            return (HashMap::new(), Some("persistent write guards are invalid"));
+        };
+        if guards
+            .insert(
+                operation.to_string(),
+                PersistedWriteGuard {
+                    request_hash,
+                    completed,
+                },
+            )
+            .is_some()
+        {
+            return (HashMap::new(), Some("persistent write guards are invalid"));
+        }
+    }
+    (guards, None)
+}
+
+fn write_guard_payload(guards: &HashMap<String, PersistedWriteGuard>) -> Result<Vec<u8>, RpcError> {
+    let entries = guards
+        .iter()
+        .map(|(operation, guard)| {
+            json!({
+                "operation": operation,
+                "requestHash": hex_encode(&guard.request_hash),
+                "state": if guard.completed { "completed" } else { "outcome_unknown" },
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&json!({"version": 1, "entries": entries}))
+        .map_err(|_| RpcError::new("PersistenceError", "failed to serialize write guards"))
+}
+
+fn save_write_guards(state: &mut State) -> Result<(), RpcError> {
+    let _lock = lock_file(&state.write_guard_path.with_extension("lock"))
+        .map_err(|_| RpcError::new("PersistenceError", "failed to lock write guards"))?;
+    let (mut merged, error) = load_write_guards(&state.write_guard_path);
+    if let Some(error) = error {
+        return Err(RpcError::new("PersistenceError", error));
+    }
+    for (operation, incoming) in &state.write_guards {
+        match merged.get(operation) {
+            None => {
+                merged.insert(operation.clone(), *incoming);
+            }
+            Some(existing) if existing.request_hash != incoming.request_hash => {
+                return Err(RpcError::new(
+                    "OperationConflict",
+                    "operationId was already used for a different write request",
+                ));
+            }
+            Some(existing) if incoming.completed && !existing.completed => {
+                merged.insert(operation.clone(), *incoming);
+            }
+            Some(_) => {}
+        }
+    }
+    if merged.len() > MAX_PERSISTED_WRITE_GUARDS {
+        return Err(RpcError::new(
+            "ResourceDeferred",
+            "persistent write guard capacity reached",
+        )
+        .retryable(true));
+    }
+    let payload = write_guard_payload(&merged)?;
+    write_file_atomic(&state.write_guard_path, &payload)
+        .map_err(|_| RpcError::new("PersistenceError", "failed to persist write guards"))?;
+    state.write_guards = merged;
+    Ok(())
+}
+
+enum WriteGuardClaim {
+    Leader,
+    Existing(bool),
+}
+
+fn claim_write_guard(
+    state: &mut State,
+    operation: String,
+    request_hash: [u8; 32],
+) -> Result<WriteGuardClaim, RpcError> {
+    if state.write_guard_error.is_some() {
+        return Err(RpcError::new(
+            "PersistenceError",
+            "persistent write guards are unavailable",
+        ));
+    }
+    let _lock = lock_file(&state.write_guard_path.with_extension("lock"))
+        .map_err(|_| RpcError::new("PersistenceError", "failed to lock write guards"))?;
+    let (mut merged, error) = load_write_guards(&state.write_guard_path);
+    if let Some(error) = error {
+        return Err(RpcError::new("PersistenceError", error));
+    }
+    if let Some(existing) = merged.get(&operation) {
+        if existing.request_hash != request_hash {
+            return Err(RpcError::new(
+                "OperationConflict",
+                "operationId was already used for a different write request",
+            ));
+        }
+        let completed = existing.completed;
+        state.write_guards = merged;
+        return Ok(WriteGuardClaim::Existing(completed));
+    }
+    if merged.len() >= MAX_PERSISTED_WRITE_GUARDS {
+        return Err(RpcError::new(
+            "ResourceDeferred",
+            "persistent write guard capacity reached",
+        )
+        .retryable(true));
+    }
+    merged.insert(
+        operation,
+        PersistedWriteGuard {
+            request_hash,
+            completed: false,
+        },
+    );
+    let payload = write_guard_payload(&merged)?;
+    write_file_atomic(&state.write_guard_path, &payload)
+        .map_err(|_| RpcError::new("PersistenceError", "failed to persist write guards"))?;
+    state.write_guards = merged;
+    Ok(WriteGuardClaim::Leader)
+}
+
+fn persist_write_guard(
+    state: &mut State,
+    operation: String,
+    request_hash: [u8; 32],
+    completed: bool,
+) -> Result<(), RpcError> {
+    if state.write_guard_error.is_some() {
+        return Err(RpcError::new(
+            "PersistenceError",
+            "persistent write guards are unavailable",
+        ));
+    }
+    let previous = state.write_guards.insert(
+        operation.clone(),
+        PersistedWriteGuard {
+            request_hash,
+            completed,
+        },
+    );
+    if let Err(error) = save_write_guards(state) {
+        match previous {
+            Some(previous) => {
+                state.write_guards.insert(operation, previous);
+            }
+            None => {
+                state.write_guards.remove(&operation);
+            }
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn finalize_write_guard(
+    state: &mut State,
+    operation: String,
+    request_hash: [u8; 32],
+    result: Result<Value, RpcError>,
+) -> Result<Value, RpcError> {
+    if result.is_ok() {
+        if let Err(error) = persist_write_guard(state, operation, request_hash, true) {
+            return Err(RpcError::new(
+                "OutcomeUnknown",
+                format!(
+                    "write completed but guard persistence failed: {}",
+                    error.message
+                ),
+            ));
+        }
+    }
+    result
+}
+
+fn write_ledger_key(
+    state: &State,
+    epoch: u64,
+    operation_id: &str,
+    method: &str,
+    path: &str,
+    data: Option<&Value>,
+) -> WriteLedgerKey {
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let action_id = segments
+        .windows(2)
+        .find(|parts| matches!(parts[0], "actions" | "trades" | "swaps"))
+        .and_then(|parts| parts[1].parse().ok())
+        .unwrap_or(0);
+    let action_type = if path.contains("/actions/") {
+        data.and_then(|data| data.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("action")
+            .to_string()
+    } else if path.contains("/trades/") {
+        "trade".to_string()
+    } else if path.contains("/swaps/") {
+        "swap".to_string()
+    } else if path.ends_with("/my-selection") {
+        "selection".to_string()
+    } else {
+        method.to_string()
+    };
+    let (session_id, config_revision) = state
+        .automation
+        .as_ref()
+        .map(|automation| (automation.session_id(), automation.config_revision()))
+        .unwrap_or(("", 0));
+    WriteLedgerKey {
+        pid: state
+            .connection
+            .as_ref()
+            .map(|connection| connection.pid)
+            .unwrap_or(0),
+        epoch,
+        session_id: session_id.to_string(),
+        action_id,
+        action_type,
+        config_revision,
+        operation_id: operation_id.to_string(),
+    }
+}
+
+fn write_file_atomic(destination: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let name = destination
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache filename is missing"))?
+        .to_string_lossy();
+    let temporary = destination.with_file_name(format!(
+        "{name}.{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result =
+        fs::write(&temporary, bytes).and_then(|_| atomic_replace_file(&temporary, destination));
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 struct State {
     epoch: u64,
     started_at: Instant,
@@ -108,17 +509,27 @@ struct State {
     external: Option<ExternalClient>,
     opgg_cache: JsonCache,
     asset: Option<AssetClient>,
+    asset_cache: Arc<AssetCache>,
     ws_task: Option<tokio::task::JoinHandle<()>>,
     ws_shutdown: Option<mpsc::Sender<()>>,
-    ws_events: Option<mpsc::Receiver<LcuEvent>>,
+    ws_event_rx_tx: mpsc::UnboundedSender<(u64, mpsc::Receiver<LcuEvent>)>,
+    ws_event_rx_rx: Option<mpsc::UnboundedReceiver<(u64, mpsc::Receiver<LcuEvent>)>>,
+    ws_queue_len: usize,
     ws_stats: Arc<WsStats>,
     sgp_token: Option<Zeroizing<String>>,
+    sgp_token_superseded: Option<Zeroizing<String>>,
+    sgp_refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    sgp_refresh_count: u64,
     cache_root: PathBuf,
     data_root: PathBuf,
     champion_aliases: Option<ChampionAliasCache>,
     external_proxy: Option<String>,
     automation: Option<DryRunAutomation>,
-    write_ledger: HashMap<(u64, String), AutomationState>,
+    write_ledger: HashMap<WriteLedgerKey, WriteLedgerEntry>,
+    write_request_hashes: HashMap<(u32, String), [u8; 32]>,
+    write_guards: HashMap<String, PersistedWriteGuard>,
+    write_guard_path: PathBuf,
+    write_guard_error: Option<&'static str>,
     catalog_champs: HashMap<String, String>,
     catalog_augments: HashMap<String, String>,
     catalog_paths: HashMap<String, String>,
@@ -126,6 +537,13 @@ struct State {
 
 impl State {
     fn new() -> Self {
+        let data_root = env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join("Seraphine");
+        let write_guard_path = data_root.join("write-guards.json");
+        let (write_guards, write_guard_error) = load_write_guards(&write_guard_path);
+        let (ws_event_rx_tx, ws_event_rx_rx) = mpsc::unbounded_channel();
         Self {
             epoch: 0,
             started_at: Instant::now(),
@@ -140,25 +558,32 @@ impl State {
             external: None,
             opgg_cache: JsonCache::default(),
             asset: None,
+            asset_cache: Arc::new(AssetCache::default()),
             ws_task: None,
             ws_shutdown: None,
-            ws_events: None,
+            ws_event_rx_tx,
+            ws_event_rx_rx: Some(ws_event_rx_rx),
+            ws_queue_len: 0,
             ws_stats: Arc::new(WsStats::default()),
             sgp_token: None,
+            sgp_token_superseded: None,
+            sgp_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            sgp_refresh_count: 0,
             cache_root: env::var_os("LOCALAPPDATA")
                 .map(PathBuf::from)
                 .unwrap_or_else(env::temp_dir)
                 .join("Seraphine")
                 .join("Cache")
                 .join("game"),
-            data_root: env::var_os("APPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(env::temp_dir)
-                .join("Seraphine"),
+            data_root,
             champion_aliases: None,
             external_proxy: None,
             automation: None,
             write_ledger: HashMap::new(),
+            write_request_hashes: HashMap::new(),
+            write_guards,
+            write_guard_path,
+            write_guard_error,
             catalog_champs: HashMap::new(),
             catalog_augments: HashMap::new(),
             catalog_paths: HashMap::new(),
@@ -241,41 +666,118 @@ fn unix_millis() -> u64 {
         .as_millis() as u64
 }
 
-async fn read_message<R>(reader: &mut R) -> io::Result<Option<Message>>
-where
-    R: AsyncRead + Unpin + ?Sized,
-{
-    let mut prefix = [0_u8; 4];
-    match reader.read_exact(&mut prefix).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error),
-    }
-    let length = u32::from_le_bytes(prefix) as usize;
-    let expected = decode_length_prefix(&prefix)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    if expected != Some(length) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid frame length",
-        ));
-    }
-    let mut payload = vec![0_u8; length];
-    reader.read_exact(&mut payload).await?;
-    decode(&payload)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+struct FrameReader<R> {
+    reader: R,
+    buffer: Vec<u8>,
+    expected: Option<usize>,
 }
 
-async fn write_message(
-    writer: &Arc<Mutex<tokio::io::Stdout>>,
-    message: &Message,
+impl<R> FrameReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buffer: Vec::new(),
+            expected: None,
+        }
+    }
+}
+
+impl<R> FrameReader<R>
+where
+    R: AsyncRead + Unpin,
+{
+    async fn read_more(&mut self) -> io::Result<bool> {
+        let mut chunk = [0_u8; 8192];
+        match self.reader.read(&mut chunk).await {
+            Ok(0) => Ok(false),
+            Ok(length) => {
+                self.buffer.extend_from_slice(&chunk[..length]);
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn next_message(&mut self) -> io::Result<Option<Message>> {
+        if self.expected.is_none() {
+            while self.buffer.len() < 4 {
+                if !self.read_more().await? {
+                    if self.buffer.is_empty() {
+                        return Ok(None);
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "partial IPC frame prefix",
+                    ));
+                }
+            }
+            let prefix: Vec<u8> = self.buffer.drain(..4).collect();
+            let length = u32::from_le_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]) as usize;
+            let expected = decode_length_prefix(&prefix)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+            if expected != Some(length) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid frame length",
+                ));
+            }
+            self.expected = Some(length);
+        }
+
+        let length = self.expected.unwrap();
+        while self.buffer.len() < length {
+            if !self.read_more().await? {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "partial IPC frame payload",
+                ));
+            }
+        }
+        let payload: Vec<u8> = self.buffer.drain(..length).collect();
+        self.expected = None;
+        decode(&payload)
+            .map(Some)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+    }
+}
+
+struct OutgoingFrame {
+    frame: Vec<u8>,
+    _permit: OwnedSemaphorePermit,
+}
+
+async fn queue_message(
+    outgoing: &mpsc::Sender<OutgoingFrame>,
+    byte_budget: &Arc<Semaphore>,
+    message: Message,
 ) -> io::Result<()> {
-    let frame = encode(message)
+    let frame = encode(&message)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let mut writer = writer.lock().await;
-    writer.write_all(&frame).await?;
-    writer.flush().await
+    let permit = Arc::clone(byte_budget)
+        .acquire_many_owned(frame.len() as u32)
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "IPC writer closed"))?;
+    outgoing
+        .send(OutgoingFrame {
+            frame,
+            _permit: permit,
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "IPC writer closed"))
+}
+
+async fn writer_loop<W>(
+    mut writer: W,
+    mut outgoing: mpsc::Receiver<OutgoingFrame>,
+) -> io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(message) = outgoing.recv().await {
+        writer.write_all(&message.frame).await?;
+        writer.flush().await?;
+    }
+    Ok(())
 }
 
 fn memory_json() -> Value {
@@ -326,17 +828,7 @@ fn load_community_cache(path: &Path, champions_key: &str) -> Option<Value> {
 fn store_community_cache(path: &Path, data: &Value) -> Result<(), RpcError> {
     let payload = serde_json::to_vec(data)
         .map_err(|error| RpcError::new("SerializeError", error.to_string()))?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| RpcError::new("InvalidParams", "cache parent is missing"))?;
-    fs::create_dir_all(parent).map_err(|error| RpcError::new("IoError", error.to_string()))?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, payload).map_err(|error| RpcError::new("IoError", error.to_string()))?;
-    if let Err(error) = atomic_replace_file(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(RpcError::new("IoError", error.to_string()));
-    }
-    Ok(())
+    write_file_atomic(path, &payload).map_err(|error| RpcError::new("IoError", error.to_string()))
 }
 
 fn opgg_params(message: &Message) -> Result<(String, String, String, String), RpcError> {
@@ -603,12 +1095,9 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 .get_json("/entitlements/v1/token")
                 .await
                 .ok()
-                .and_then(|data| {
-                    data.get("accessToken")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
+                .and_then(|data| parse_sgp_token(&data))
                 .map(Zeroizing::new);
+            state.sgp_token_superseded = None;
             state.epoch = state.epoch.wrapping_add(1);
             state.write_ledger.clear();
             let connection = ConnectionInfo {
@@ -621,6 +1110,7 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
             state.sgp = None;
             state.external = None;
             state.asset = None;
+            state.asset_cache.clear_failures();
             if let Some(shutdown) = state.ws_shutdown.take() {
                 let _ = shutdown.send(()).await;
             }
@@ -647,7 +1137,7 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 Arc::clone(&stats),
             )));
             state.ws_shutdown = Some(shutdown_tx);
-            state.ws_events = Some(event_rx);
+            let _ = state.ws_event_rx_tx.send((connection.epoch, event_rx));
             state.ws_stats = stats;
             state.connection = Some(connection.clone());
             state.restore_catalog_indexes();
@@ -731,9 +1221,19 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let data = args.get("data").cloned();
+                let lowercase_path = path.to_ascii_lowercase();
                 if !matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
                     || !path.starts_with('/')
+                    || path.len() <= 1
+                    || path == "/lol-champ-select/v1/session"
+                    || path.ends_with('/')
                     || path.contains("://")
+                    || path.contains('?')
+                    || path.contains('#')
+                    || path.split('/').any(|segment| matches!(segment, "." | ".."))
+                    || lowercase_path.contains("%2e")
+                    || lowercase_path.contains("%2f")
+                    || lowercase_path.contains("%5c")
                     || path.contains('\r')
                     || path.contains('\n')
                     || path.len() > 2048
@@ -857,13 +1357,7 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 );
             }
             let path = base.join("catalog.json");
-            let temporary = base.join("catalog.json.tmp");
-            if let Err(error) = fs::write(&temporary, &payload).and_then(|_| {
-                if path.exists() {
-                    fs::remove_file(&path)?;
-                }
-                fs::rename(&temporary, &path)
-            }) {
+            if let Err(error) = write_file_atomic(&path, &payload) {
                 state.metrics.errors += 1;
                 return Message::response_error(
                     id,
@@ -939,23 +1433,40 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     );
                 }
             };
-            let params = message.args.as_ref().and_then(|args| args.get("params"));
-            match state
-                .sgp
+            let params = message
+                .args
                 .as_ref()
-                .unwrap()
-                .get_json(path, token.as_str(), params)
-                .await
-            {
-                Ok(data) => {
-                    drop(permit);
-                    Ok(data)
+                .and_then(|args| args.get("params"))
+                .cloned();
+            let sgp = state.sgp.as_ref().unwrap().clone();
+            let mut current_token = token;
+            let mut retried = false;
+            let mut refreshed = false;
+            let result = loop {
+                match sgp
+                    .get_json_once(path, current_token.as_str(), params.as_ref())
+                    .await
+                {
+                    Ok(data) => break Ok(data),
+                    Err(LcuError::Unauthorized) if !refreshed => {
+                        if let Err(error) = refresh_sgp_token(state, &current_token).await {
+                            break Err(error);
+                        }
+                        current_token = state
+                            .sgp_token
+                            .clone()
+                            .expect("SGP token missing after refresh");
+                        refreshed = true;
+                    }
+                    Err(error) if !retried && should_retry_sgp(&error) => {
+                        retried = true;
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                    Err(error) => break Err(sgp_rpc_error(error)),
                 }
-                Err(error) => {
-                    drop(permit);
-                    Err(RpcError::new("SgpError", error.to_string()).retryable(true))
-                }
-            }
+            };
+            drop(permit);
+            result
         }
         "asset.get" => {
             let args = message.args.clone().unwrap_or(Value::Null);
@@ -971,33 +1482,23 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     return Message::response_error(id, epoch, error);
                 }
             };
-            if destination.is_file() {
-                return Message::response(id, epoch, json!({ "path": destination }));
-            }
-            let max_bytes = args
-                .get("maxBytes")
-                .and_then(Value::as_u64)
-                .unwrap_or(2 * 1024 * 1024) as usize;
-            let priority = if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
-                Priority::P2
-            } else {
-                Priority::P3
-            };
-            let permit = match state.scheduler.try_acquire(priority, max_bytes) {
-                Ok(permit) => permit,
-                Err(error) => {
+            let max_bytes = match usize::try_from(
+                args.get("maxBytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(2 * 1024 * 1024),
+            ) {
+                Ok(max_bytes) if max_bytes > 0 => max_bytes,
+                _ => {
                     state.metrics.errors += 1;
                     return Message::response_error(
                         id,
                         epoch,
-                        RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true),
+                        RpcError::new("InvalidParams", "invalid asset byte budget"),
                     );
                 }
             };
-            let lcu_client = state.lcu.clone();
-            let bytes = if let Some(path) = args.get("path").and_then(Value::as_str) {
+            let source = if let Some(path) = args.get("path").and_then(Value::as_str) {
                 if !path.starts_with('/') || path.contains("://") {
-                    drop(permit);
                     state.metrics.errors += 1;
                     return Message::response_error(
                         id,
@@ -1005,41 +1506,10 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                         RpcError::new("InvalidParams", "only LCU asset paths are allowed"),
                     );
                 }
-                let Some(client) = lcu_client else {
-                    drop(permit);
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("NotConnected", "LCU is not connected"),
-                    );
-                };
-                client.get_bytes(path, max_bytes).await
+                AssetSource::Lcu(path.to_string())
             } else if let Some(url) = args.get("url").and_then(Value::as_str) {
-                if state.asset.is_none() {
-                    match AssetClient::new(
-                        None,
-                        vec![
-                            "raw.communitydragon.org".to_string(),
-                            "lol-api-champion.op.gg".to_string(),
-                            "game.gtimg.cn".to_string(),
-                        ],
-                    ) {
-                        Ok(client) => state.asset = Some(client),
-                        Err(error) => {
-                            drop(permit);
-                            state.metrics.errors += 1;
-                            return Message::response_error(
-                                id,
-                                epoch,
-                                RpcError::new("AssetError", error.to_string()),
-                            );
-                        }
-                    }
-                }
-                state.asset.as_ref().unwrap().download(url, max_bytes).await
+                AssetSource::External(url.to_string())
             } else {
-                drop(permit);
                 state.metrics.errors += 1;
                 return Message::response_error(
                     id,
@@ -1047,43 +1517,18 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     RpcError::new("InvalidParams", "path or url is required"),
                 );
             };
-            drop(permit);
-            let bytes = match bytes {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("AssetError", error.to_string()).retryable(true),
-                    );
-                }
+            let priority = if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                Priority::P2
+            } else {
+                Priority::P3
             };
-            if let Some(parent) = destination.parent() {
-                if let Err(error) = fs::create_dir_all(parent) {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("IoError", error.to_string()),
-                    );
-                }
+            match state
+                .cached_asset(destination, source, max_bytes, priority)
+                .await
+            {
+                Ok(path) => Ok(json!({ "path": path })),
+                Err(error) => Err(error),
             }
-            let temporary = destination.with_file_name(format!("{name}.tmp"));
-            if let Err(error) = fs::write(&temporary, &bytes).and_then(|_| {
-                if destination.exists() {
-                    fs::remove_file(&destination)?;
-                }
-                fs::rename(&temporary, &destination)
-            }) {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("IoError", error.to_string()),
-                );
-            }
-            Ok(json!({ "path": destination }))
         }
         "external.get" => {
             let Some(url) = message
@@ -1164,6 +1609,14 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
             }
         }
         "automation.configure" => {
+            if message.epoch != Some(state.epoch) {
+                state.metrics.errors += 1;
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "stale automation epoch"),
+                );
+            }
             let args = message.args.clone().unwrap_or(Value::Null);
             let Some(session_id) = args.get("sessionId").and_then(Value::as_str) else {
                 state.metrics.errors += 1;
@@ -1173,15 +1626,25 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     RpcError::new("InvalidParams", "sessionId is required"),
                 );
             };
+            if session_id.is_empty() || session_id.len() > 128 {
+                state.metrics.errors += 1;
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "invalid sessionId"),
+                );
+            }
             let config = args.get("config").cloned().unwrap_or(Value::Null);
-            match &mut state.automation {
-                None => {
-                    state.automation = Some(DryRunAutomation::new(state.epoch, session_id, config));
-                }
-                Some(automation) => {
-                    automation.reset_session(session_id);
-                    automation.update_config(config);
-                }
+            let replace = state
+                .automation
+                .as_ref()
+                .map(|automation| automation.epoch() != state.epoch)
+                .unwrap_or(true);
+            if replace {
+                state.automation = Some(DryRunAutomation::new(state.epoch, session_id, config));
+            } else if let Some(automation) = state.automation.as_mut() {
+                automation.reset_session(session_id);
+                automation.update_config(config);
             }
             if let Some(queue_id) = args.get("queueId").and_then(Value::as_u64) {
                 if let Some(automation) = state.automation.as_mut() {
@@ -1191,6 +1654,14 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
             Ok(json!({ "configured": true }))
         }
         "automation.dry_run" => {
+            if message.epoch != Some(state.epoch) {
+                state.metrics.errors += 1;
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "stale automation epoch"),
+                );
+            }
             let Some(automation) = state.automation.as_mut() else {
                 state.metrics.errors += 1;
                 return Message::response_error(
@@ -1252,12 +1723,11 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 Ok(raw) => raw,
                 Err(error) => return Message::response_error(id, epoch, error),
             };
-            let mut data = if mode == "ranked" {
+            let data = if mode == "ranked" {
                 parse_ranked_tier_list(&raw)
             } else {
                 parse_other_tier_list(&raw)
             };
-            state.resolve_opgg_icons(&mut data).await;
             Ok(json!({
                 "data": data,
                 "version": raw.get("meta").and_then(|meta| meta.get("version")).cloned().unwrap_or(Value::Null),
@@ -1411,11 +1881,19 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 state.metrics.cache_coalesced = cache.coalesced;
             }
             let opgg_cache = state.opgg_cache.metrics();
+            let asset_cache = state.asset_cache.metrics();
             Ok(json!({
                 "metrics": state.metrics,
                 "opggCache": {
                     "hits": opgg_cache.hits,
                     "coalesced": opgg_cache.coalesced,
+                },
+                "assetCache": {
+                    "inflight": asset_cache.inflight,
+                    "negativeEntries": asset_cache.negative_entries,
+                    "coalesced": asset_cache.coalesced,
+                    "negativeHits": asset_cache.negative_hits,
+                    "failures": asset_cache.failures,
                 },
                 "rates": {
                     "requestsPerSecond": requests_per_second,
@@ -1434,6 +1912,8 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 "writes": json!({
                     "enabled": active_capabilities().contains(&"lcu.write"),
                     "ledgerEntries": state.write_ledger.len(),
+                    "persistedGuards": state.write_guards.len(),
+                    "persistenceError": state.write_guard_error,
                 }),
                 "clients": json!({
                     "lcu": state.lcu.is_some(),
@@ -1441,12 +1921,13 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                     "external": state.external.is_some(),
                     "asset": state.asset.is_some(),
                 }),
+                "sgpRefreshCount": state.sgp_refresh_count,
                 "websocket": {
                     "received": state.ws_stats.received.load(Ordering::Relaxed),
                     "dropped": state.ws_stats.dropped.load(Ordering::Relaxed),
                     "reconnects": state.ws_stats.reconnects.load(Ordering::Relaxed),
                     "snapshots": state.ws_stats.snapshots.load(Ordering::Relaxed),
-                    "queued": state.ws_events.as_ref().map(|events| events.len()).unwrap_or(0),
+                    "queued": state.ws_queue_len,
                 },
             }))
         }
@@ -1466,12 +1947,441 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
     }
 }
 
+fn is_concurrent_read_op(op: &str) -> bool {
+    matches!(
+        op,
+        "health"
+            | "process.list"
+            | "process.command_line"
+            | "lcu.summoner_by_pid"
+            | "lcu.get"
+            | "external.get"
+            | "aram_buff.get"
+            | "champion_alias.search"
+            | "echo"
+    )
+}
+
+async fn handle_concurrent_read_request(message: &Message, shared: &Arc<Mutex<State>>) -> Message {
+    let id = message.id.unwrap_or(0);
+    let op = message.op.as_deref().unwrap_or_default();
+    let epoch = {
+        let mut state = shared.lock().await;
+        state.metrics.requests += 1;
+        message.epoch.unwrap_or(state.epoch)
+    };
+    let result = match op {
+        "health" => {
+            let state = shared.lock().await;
+            Ok(json!({
+                "pid": std::process::id(),
+                "epoch": state.epoch,
+                "protocol": PROTOCOL_VERSION,
+                "uptimeMs": state.started_at.elapsed().as_millis(),
+                "memory": memory_json(),
+                "connection": state.connection.as_ref().map(|connection| json!({
+                    "pid": connection.pid,
+                    "port": connection.port,
+                    "server": connection.server,
+                    "epoch": connection.epoch,
+                })),
+            }))
+        }
+        "process.list" => match list_processes() {
+            Ok(processes) => Ok(json!({
+                "processes": processes,
+                "leagueClientPids": list_league_client_pids().unwrap_or_default(),
+            })),
+            Err(error) => Err(RpcError::new("PlatformError", error.to_string()).retryable(true)),
+        },
+        "process.command_line" => {
+            let Some(pid) = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("pid"))
+                .and_then(Value::as_u64)
+            else {
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "pid is required"),
+                );
+            };
+            match read_process_command_line(pid as u32) {
+                Ok(command_line) => Ok(json!({
+                    "pid": command_line.pid,
+                    "port": command_line.port,
+                    "server": command_line.server,
+                    "hasToken": command_line.token.is_some(),
+                })),
+                Err(error) => Err(RpcError::new("PlatformError", error.to_string())),
+            }
+        }
+        "lcu.summoner_by_pid" => {
+            let Some(pid) = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("pid"))
+                .and_then(Value::as_u64)
+            else {
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "pid is required"),
+                );
+            };
+            let scheduler = shared.lock().await.scheduler.clone();
+            async {
+                let command_line = read_process_command_line(pid as u32)
+                    .map_err(|error| RpcError::new("PlatformError", error.to_string()))?;
+                let (Some(port), Some(token)) = (command_line.port, command_line.token.as_ref())
+                else {
+                    return Err(RpcError::new("InvalidParams", "LCU credentials not found"));
+                };
+                let client = LcuClient::new(port, token.as_str())
+                    .map_err(|error| RpcError::new("ConnectionError", error.to_string()))?;
+                let _permit = scheduler
+                    .try_acquire(Priority::P2, 64 * 1024)
+                    .map_err(|error| {
+                        RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true)
+                    })?;
+                client
+                    .get_json("/lol-summoner/v1/current-summoner")
+                    .await
+                    .map_err(|error| RpcError::new("LcuError", error.to_string()).retryable(true))
+            }
+            .await
+        }
+        "lcu.get" => {
+            let Some(path) = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("path"))
+                .and_then(Value::as_str)
+            else {
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "path is required"),
+                );
+            };
+            if !path.starts_with('/') || path.contains("://") {
+                Err(RpcError::new("InvalidParams", "only LCU paths are allowed"))
+            } else {
+                async {
+                    let (client, scheduler) = {
+                        let state = shared.lock().await;
+                        (state.lcu.clone(), state.scheduler.clone())
+                    };
+                    let client = client
+                        .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+                    let _permit =
+                        scheduler
+                            .try_acquire(Priority::P1, 64 * 1024)
+                            .map_err(|error| {
+                                RpcError::new("ResourceDeferred", format!("{error:?}"))
+                                    .retryable(true)
+                            })?;
+                    client.get_json(path).await.map_err(|error| {
+                        RpcError::new("LcuError", error.to_string()).retryable(true)
+                    })
+                }
+                .await
+            }
+        }
+        "external.get" => {
+            let Some(url) = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("url"))
+                .and_then(Value::as_str)
+            else {
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "url is required"),
+                );
+            };
+            let parsed = match reqwest::Url::parse(url) {
+                Ok(url) => url,
+                Err(error) => {
+                    return Message::response_error(
+                        id,
+                        epoch,
+                        RpcError::new("InvalidParams", error.to_string()),
+                    )
+                }
+            };
+            let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+            let allowed = [
+                "lol-api-champion.op.gg",
+                "raw.communitydragon.org",
+                "game.gtimg.cn",
+            ];
+            if parsed.scheme() != "https"
+                || !allowed
+                    .iter()
+                    .any(|item| host == *item || host.ends_with(&format!(".{item}")))
+            {
+                Err(RpcError::new(
+                    "InvalidParams",
+                    "external host is not allowed",
+                ))
+            } else {
+                async {
+                    let (client, scheduler) = {
+                        let mut state = shared.lock().await;
+                        if state.external.is_none() {
+                            state.external = Some(
+                                ExternalClient::new(state.external_proxy.as_deref()).map_err(
+                                    |error| RpcError::new("ConnectionError", error.to_string()),
+                                )?,
+                            );
+                        }
+                        (state.external.clone().unwrap(), state.scheduler.clone())
+                    };
+                    let _permit =
+                        scheduler
+                            .try_acquire(Priority::P2, 512 * 1024)
+                            .map_err(|error| {
+                                RpcError::new("ResourceDeferred", format!("{error:?}"))
+                                    .retryable(true)
+                            })?;
+                    client.get_json(url).await.map_err(|error| {
+                        RpcError::new("ExternalError", error.to_string()).retryable(true)
+                    })
+                }
+                .await
+            }
+        }
+        "aram_buff.get" => {
+            let Some(champion_id) = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("championId"))
+                .and_then(Value::as_u64)
+            else {
+                return Message::response_error(
+                    id,
+                    epoch,
+                    RpcError::new("InvalidParams", "championId is required"),
+                );
+            };
+            let path = shared.lock().await.data_root.join("AramBuff.json");
+            let data = load_community_cache(&path, "champions");
+            Ok(json!({
+                "available": data.is_some(),
+                "version": data.as_ref().and_then(|data| data.get("version")).cloned(),
+                "info": data.as_ref().and_then(|data| aram_info(data, champion_id)),
+            }))
+        }
+        "champion_alias.search" => {
+            let aliases = {
+                let mut state = shared.lock().await;
+                if state.champion_aliases.is_none() {
+                    let cached = load_community_cache(
+                        &state.data_root.join("ChampionAlias.json"),
+                        "champions",
+                    );
+                    state.champion_aliases =
+                        cached.as_ref().and_then(ChampionAliasCache::from_value);
+                }
+                state.champion_aliases.clone()
+            };
+            let data = match aliases {
+                Some(data) => data,
+                None => {
+                    return Message::response_error(
+                        id,
+                        epoch,
+                        RpcError::new("NotFound", "champion aliases are unavailable"),
+                    )
+                }
+            };
+            let query = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("query"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_lowercase();
+            let mut ids = data
+                .champions
+                .iter()
+                .filter(|(_, aliases)| query.is_empty() || aliases.to_lowercase().contains(&query))
+                .filter_map(|(id, _)| id.parse::<u64>().ok())
+                .collect::<Vec<_>>();
+            ids.sort_unstable();
+            Ok(json!(ids))
+        }
+        "echo" => Ok(message.args.clone().unwrap_or(Value::Null)),
+        _ => Err(RpcError::new(
+            "MethodNotFound",
+            format!("unknown operation: {op}"),
+        )),
+    };
+    match result {
+        Ok(data) => Message::response(id, epoch, data),
+        Err(error) => {
+            shared.lock().await.metrics.errors += 1;
+            Message::response_error(id, epoch, error)
+        }
+    }
+}
+
+fn parse_sgp_token(data: &Value) -> Option<String> {
+    data.get("accessToken")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+fn apply_sgp_token_event(state: &mut State, token: String) {
+    if state.sgp_token_superseded.as_deref() == Some(&token) {
+        return;
+    }
+    state.sgp_token = Some(Zeroizing::new(token));
+    state.sgp_token_superseded = None;
+}
+
+async fn refresh_sgp_token(
+    state: &mut State,
+    previous_token: &Zeroizing<String>,
+) -> Result<(), RpcError> {
+    let _refresh_guard = state.sgp_refresh_lock.lock().await;
+    if state.sgp_token.as_ref() != Some(previous_token) {
+        return Ok(());
+    }
+    let client = state
+        .lcu
+        .clone()
+        .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+    let data = client
+        .get_json_fresh("/entitlements/v1/token")
+        .await
+        .map_err(|error| RpcError::new("LcuError", error.to_string()))?;
+    let token = parse_sgp_token(&data)
+        .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"))?;
+    if token == previous_token.as_str() {
+        return Err(RpcError::new(
+            "SgpError",
+            "SGP token did not change after refresh",
+        ));
+    }
+    state.sgp_token_superseded = Some(previous_token.clone());
+    state.sgp_token = Some(Zeroizing::new(token));
+    state.sgp_refresh_count = state.sgp_refresh_count.saturating_add(1);
+    Ok(())
+}
+
+fn sgp_rpc_error(error: LcuError) -> RpcError {
+    RpcError::new("SgpError", error.to_string()).retryable(should_retry_sgp(&error))
+}
+
 fn requires_champ_select_guard(path: &str) -> bool {
     path.starts_with("/lol-champ-select/v1/session/")
         && (path.contains("/actions/")
             || path.ends_with("/my-selection")
             || ((path.contains("/trades/") || path.contains("/swaps/"))
                 && path.ends_with("/accept")))
+}
+
+async fn read_write_confirmation(
+    state: &State,
+    client: &LcuClient,
+    path: &str,
+    data: Option<&Value>,
+) -> Result<(), RpcError> {
+    let read_permit = state
+        .scheduler
+        .try_acquire(Priority::P1, 64 * 1024)
+        .map_err(|error| RpcError::new("ResourceDeferred", format!("{error:?}")))?;
+    let confirmation = client
+        .get_json_fresh("/lol-champ-select/v1/session")
+        .await
+        .map_err(|error| RpcError::new("LcuError", error.to_string()))
+        .and_then(|session| {
+            confirm_write(&session, path, data)
+                .map_err(|error| RpcError::new("InvalidState", error.as_str()))
+        });
+    drop(read_permit);
+    confirmation
+}
+
+fn finish_write(
+    ledger: &mut HashMap<WriteLedgerKey, WriteLedgerEntry>,
+    key: WriteLedgerKey,
+    request_hash: [u8; 32],
+    confirmation: Result<(), RpcError>,
+    response_data: Value,
+    write_error: Option<&str>,
+) -> Result<Value, RpcError> {
+    match confirmation {
+        Ok(()) => {
+            ledger.insert(
+                key,
+                WriteLedgerEntry {
+                    request_hash,
+                    state: AutomationState::Completed,
+                },
+            );
+            let mut result = json!({
+                "replayed": false,
+                "state": "completed",
+                "data": response_data,
+            });
+            if write_error.is_some() {
+                result["confirmedAfterError"] = Value::Bool(true);
+            }
+            Ok(result)
+        }
+        Err(error) => {
+            ledger.insert(
+                key,
+                WriteLedgerEntry {
+                    request_hash,
+                    state: AutomationState::OutcomeUnknown,
+                },
+            );
+            let context = write_error
+                .map(|write_error| {
+                    format!(
+                        "write returned error ({write_error}); confirmation failed: {}",
+                        error.message
+                    )
+                })
+                .unwrap_or_else(|| format!("write needs inspection: {}", error.message));
+            Err(RpcError::new("OutcomeUnknown", context))
+        }
+    }
+}
+
+fn ensure_write_capacity(state: &mut State) -> Result<(), RpcError> {
+    if state.write_guards.len() >= MAX_PERSISTED_WRITE_GUARDS {
+        return Err(RpcError::new(
+            "ResourceDeferred",
+            "persistent write guard capacity reached",
+        )
+        .retryable(true));
+    }
+    if state.write_ledger.len() >= 256 || state.write_request_hashes.len() >= 512 {
+        let completed = state
+            .write_ledger
+            .iter()
+            .find(|(_, entry)| entry.state == AutomationState::Completed)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = completed {
+            state.write_ledger.remove(&key);
+            state
+                .write_request_hashes
+                .remove(&(key.pid, key.operation_id.clone()));
+        }
+    }
+    if state.write_ledger.len() < 256 && state.write_request_hashes.len() < 512 {
+        Ok(())
+    } else {
+        Err(RpcError::new("ResourceDeferred", "write ledger is full").retryable(true))
+    }
 }
 
 async fn write_lcu(
@@ -1482,26 +2392,65 @@ async fn write_lcu(
     operation_id: &str,
     data: Option<Value>,
 ) -> Result<Value, RpcError> {
-    let key = (epoch, operation_id.to_string());
-    if let Some(outcome) = state.write_ledger.get(&key) {
-        return match outcome {
+    let key = write_ledger_key(state, epoch, operation_id, method, path, data.as_ref());
+    let request_hash = write_request_hash(method, path, data.as_ref());
+    let operation_scope = (key.pid, key.operation_id.clone());
+    let guard_key = operation_guard_key(key.pid, &key.operation_id);
+    if let Some(guard) = state.write_guards.get(&guard_key) {
+        if guard.request_hash != request_hash {
+            return Err(RpcError::new(
+                "OperationConflict",
+                "operationId was already used for a different write request",
+            ));
+        }
+        if guard.completed {
+            return Ok(json!({
+                "replayed": true,
+                "state": "completed",
+                "data": Value::Null
+            }));
+        }
+        return Err(RpcError::new(
+            "OutcomeUnknown",
+            "previous write outcome is unknown; inspect LCU state before retrying",
+        ));
+    }
+    if let Some(previous_hash) = state.write_request_hashes.get(&operation_scope) {
+        if *previous_hash != request_hash {
+            return Err(RpcError::new(
+                "OperationConflict",
+                "operationId was already used for a different write request",
+            ));
+        }
+        if !state.write_ledger.contains_key(&key) {
+            return Err(RpcError::new(
+                "OutcomeUnknown",
+                "operationId was used in a previous connection; inspect LCU state before retrying",
+            ));
+        }
+    }
+    if let Some(entry) = state.write_ledger.get(&key) {
+        if entry.request_hash != request_hash {
+            return Err(RpcError::new(
+                "OperationConflict",
+                "operationId was already used for a different write request",
+            ));
+        }
+        return match entry.state {
             AutomationState::Completed => Ok(json!({
                 "replayed": true,
                 "state": "completed",
                 "data": Value::Null
             })),
-            AutomationState::Failed => Err(RpcError::new(
+            AutomationState::Failed | AutomationState::OutcomeUnknown => Err(RpcError::new(
                 "OutcomeUnknown",
-                "previous write failed; inspect LCU state before retrying",
+                "previous write outcome is unknown; inspect LCU state before retrying",
             )),
             _ => Err(RpcError::new(
                 "OutcomeUnknown",
                 "previous write outcome is unknown",
             )),
         };
-    }
-    if state.write_ledger.len() >= 256 {
-        return Err(RpcError::new("ResourceDeferred", "write ledger is full").retryable(true));
     }
     let Some(client) = state.lcu.clone() else {
         return Err(RpcError::new("NotConnected", "LCU is not connected"));
@@ -1524,9 +2473,33 @@ async fn write_lcu(
         .scheduler
         .try_acquire(Priority::P0, 256 * 1024)
         .map_err(|error| RpcError::new("ResourceDeferred", format!("{error:?}")))?;
+    ensure_write_capacity(state)?;
+    match claim_write_guard(state, guard_key.clone(), request_hash)? {
+        WriteGuardClaim::Leader => {}
+        WriteGuardClaim::Existing(true) => {
+            return Ok(json!({
+                "replayed": true,
+                "state": "completed",
+                "data": Value::Null
+            }));
+        }
+        WriteGuardClaim::Existing(false) => {
+            return Err(RpcError::new(
+                "OutcomeUnknown",
+                "previous write outcome is unknown; inspect LCU state before retrying",
+            ));
+        }
+    }
     state
-        .write_ledger
-        .insert(key.clone(), AutomationState::Writing);
+        .write_request_hashes
+        .insert(operation_scope, request_hash);
+    state.write_ledger.insert(
+        key.clone(),
+        WriteLedgerEntry {
+            request_hash,
+            state: AutomationState::Writing,
+        },
+    );
     let write_data = data.clone();
     let result = match method {
         "POST" => client.post_json(path, write_data).await,
@@ -1536,45 +2509,55 @@ async fn write_lcu(
         _ => unreachable!(),
     };
     match result {
-        Ok(response_data) => {
-            if guarded {
-                let read_permit = match state.scheduler.try_acquire(Priority::P1, 64 * 1024) {
-                    Ok(permit) => permit,
-                    Err(error) => {
-                        state
-                            .write_ledger
-                            .insert(key, AutomationState::OutcomeUnknown);
-                        return Err(RpcError::new(
-                            "OutcomeUnknown",
-                            format!("write confirmation was deferred: {error:?}"),
-                        ));
-                    }
-                };
-                let confirmation = client
-                    .get_json_fresh("/lol-champ-select/v1/session")
-                    .await
-                    .map_err(|error| RpcError::new("LcuError", error.to_string()))
-                    .and_then(|session| {
-                        confirm_write(&session, path, data.as_ref())
-                            .map_err(|error| RpcError::new("InvalidState", error.as_str()))
-                    });
-                drop(read_permit);
-                if let Err(error) = confirmation {
-                    state
-                        .write_ledger
-                        .insert(key, AutomationState::OutcomeUnknown);
-                    return Err(RpcError::new(
-                        "OutcomeUnknown",
-                        format!("write needs inspection: {}", error.message),
-                    ));
-                }
-            }
-            state.write_ledger.insert(key, AutomationState::Completed);
-            Ok(json!({ "replayed": false, "state": "completed", "data": response_data }))
+        Ok(response_data) if guarded => {
+            let confirmation = read_write_confirmation(state, &client, path, data.as_ref()).await;
+            let result = finish_write(
+                &mut state.write_ledger,
+                key,
+                request_hash,
+                confirmation,
+                response_data,
+                None,
+            );
+            finalize_write_guard(state, guard_key, request_hash, result)
         }
-        Err(error) => {
-            state.write_ledger.insert(key, AutomationState::Failed);
-            Err(RpcError::new("LcuError", error.to_string()))
+        Ok(response_data) => {
+            state.write_ledger.insert(
+                key,
+                WriteLedgerEntry {
+                    request_hash,
+                    state: AutomationState::Completed,
+                },
+            );
+            let result =
+                Ok(json!({ "replayed": false, "state": "completed", "data": response_data }));
+            finalize_write_guard(state, guard_key, request_hash, result)
+        }
+        Err(write_error) if guarded => {
+            let write_error = write_error.to_string();
+            let confirmation = read_write_confirmation(state, &client, path, data.as_ref()).await;
+            let result = finish_write(
+                &mut state.write_ledger,
+                key,
+                request_hash,
+                confirmation,
+                Value::Null,
+                Some(&write_error),
+            );
+            finalize_write_guard(state, guard_key, request_hash, result)
+        }
+        Err(write_error) => {
+            state.write_ledger.insert(
+                key,
+                WriteLedgerEntry {
+                    request_hash,
+                    state: AutomationState::OutcomeUnknown,
+                },
+            );
+            Err(RpcError::new(
+                "OutcomeUnknown",
+                format!("write failed without readback: {write_error}"),
+            ))
         }
     }
 }
@@ -1594,6 +2577,106 @@ fn event_topic(event: &LcuEvent) -> &'static str {
 }
 
 impl State {
+    async fn cached_asset(
+        &mut self,
+        destination: PathBuf,
+        source: AssetSource,
+        max_bytes: usize,
+        priority: Priority,
+    ) -> Result<PathBuf, RpcError> {
+        let key = source.cache_key(&destination, max_bytes);
+        loop {
+            if destination.is_file() {
+                return Ok(destination);
+            }
+            match self.asset_cache.start(&key) {
+                AssetStart::Leader => break,
+                AssetStart::Wait(mut receiver) => {
+                    receiver
+                        .changed()
+                        .await
+                        .map_err(|_| RpcError::new("AssetError", "asset download task closed"))?;
+                }
+                AssetStart::Deferred => {
+                    return Err(
+                        RpcError::new("AssetDeferred", "asset download failed recently")
+                            .retryable(true),
+                    );
+                }
+            }
+        }
+
+        let flight = AssetFlight::new(Arc::clone(&self.asset_cache), key);
+        let result = self
+            .fetch_asset_bytes(&source, max_bytes, priority)
+            .await
+            .and_then(|bytes| {
+                write_file_atomic(&destination, &bytes)
+                    .map_err(|error| RpcError::new("IoError", error.to_string()))
+            });
+        match result {
+            Ok(()) => {
+                flight.complete();
+                Ok(destination)
+            }
+            Err(error) => {
+                if error.code == "ResourceDeferred" {
+                    flight.complete();
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn fetch_asset_bytes(
+        &mut self,
+        source: &AssetSource,
+        max_bytes: usize,
+        priority: Priority,
+    ) -> Result<Vec<u8>, RpcError> {
+        let permit = self
+            .scheduler
+            .try_acquire(priority, max_bytes)
+            .map_err(|error| {
+                RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true)
+            })?;
+        let result = match source {
+            AssetSource::Lcu(path) => {
+                let client = self
+                    .lcu
+                    .clone()
+                    .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+                client
+                    .get_bytes(path, max_bytes)
+                    .await
+                    .map_err(|error| RpcError::new("AssetError", error.to_string()))
+            }
+            AssetSource::External(url) => {
+                if self.asset.is_none() {
+                    self.asset = Some(
+                        AssetClient::new(
+                            self.external_proxy.as_deref(),
+                            vec![
+                                "raw.communitydragon.org".to_string(),
+                                "lol-api-champion.op.gg".to_string(),
+                                "game.gtimg.cn".to_string(),
+                            ],
+                        )
+                        .map_err(|error| RpcError::new("AssetError", error.to_string()))?,
+                    );
+                }
+                self.asset
+                    .as_ref()
+                    .unwrap()
+                    .download(url, max_bytes)
+                    .await
+                    .map_err(|error| RpcError::new("AssetError", error.to_string()))
+            }
+        };
+        drop(permit);
+        result
+    }
+
     async fn cache_icon(
         &mut self,
         folder: &str,
@@ -1603,59 +2686,16 @@ impl State {
         max_bytes: usize,
     ) -> Result<String, RpcError> {
         let destination = safe_cache_path(&self.cache_root, folder, name)?;
-        if destination.is_file() {
-            return Ok(destination.to_string_lossy().to_string());
-        }
-        let _permit = self
-            .scheduler
-            .try_acquire(Priority::P2, max_bytes)
-            .map_err(|error| RpcError::new("ResourceDeferred", format!("{error:?}")))?;
-        let bytes = if let Some(path) = path {
-            let client = self
-                .lcu
-                .clone()
-                .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
-            client
-                .get_bytes(path, max_bytes)
-                .await
-                .map_err(|error| RpcError::new("AssetError", error.to_string()))?
+        let source = if let Some(path) = path {
+            AssetSource::Lcu(path.to_string())
         } else if let Some(url) = url {
-            if self.asset.is_none() {
-                self.asset = Some(
-                    AssetClient::new(
-                        self.external_proxy.as_deref(),
-                        vec![
-                            "raw.communitydragon.org".to_string(),
-                            "lol-api-champion.op.gg".to_string(),
-                            "game.gtimg.cn".to_string(),
-                        ],
-                    )
-                    .map_err(|error| RpcError::new("AssetError", error.to_string()))?,
-                );
-            }
-            self.asset
-                .as_ref()
-                .unwrap()
-                .download(url, max_bytes)
-                .await
-                .map_err(|error| RpcError::new("AssetError", error.to_string()))?
+            AssetSource::External(url.to_string())
         } else {
             return Err(RpcError::new("InvalidParams", "icon source is missing"));
         };
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| RpcError::new("IoError", error.to_string()))?;
-        }
-        let temporary = destination.with_file_name(format!("{name}.tmp"));
-        fs::write(&temporary, bytes)
-            .and_then(|_| {
-                if destination.exists() {
-                    fs::remove_file(&destination)?;
-                }
-                fs::rename(&temporary, &destination)
-            })
-            .map_err(|error| RpcError::new("IoError", error.to_string()))?;
-        Ok(destination.to_string_lossy().to_string())
+        self.cached_asset(destination, source, max_bytes, Priority::P2)
+            .await
+            .map(|path| path.to_string_lossy().to_string())
     }
 
     async fn resolve_icon(&mut self, spec: String) -> String {
@@ -1933,8 +2973,91 @@ impl seraphine_domain::opgg::IconResolver for State {
     }
 }
 
-async fn receive_ws_event(state: &mut State) -> Option<LcuEvent> {
-    state.ws_events.as_mut()?.recv().await
+const MAX_CONCURRENT_READS: usize = 8;
+
+struct InFlightRequest {
+    task: tokio::task::JoinHandle<()>,
+    token: u64,
+    started: Arc<AtomicBool>,
+    deadline: Option<tokio::time::Instant>,
+    abandoned: bool,
+    cancel_safe: bool,
+    started_at: Instant,
+    epoch: u64,
+}
+
+async fn execute_request(
+    message: Message,
+    shared: Arc<Mutex<State>>,
+    read_slots: Arc<Semaphore>,
+    control_slots: Arc<Semaphore>,
+    completion: mpsc::Sender<(u64, u64, Message)>,
+    started: Arc<AtomicBool>,
+    token: u64,
+) {
+    let cancel_safe = is_concurrent_read_op(message.op.as_deref().unwrap_or_default());
+    let slots = if cancel_safe {
+        read_slots
+    } else {
+        control_slots
+    };
+    let _permit = Arc::clone(&slots).acquire_owned().await;
+    started.store(true, Ordering::Release);
+    let response = if cancel_safe {
+        handle_concurrent_read_request(&message, &shared).await
+    } else {
+        let mut state = shared.lock().await;
+        handle_request(&message, &mut state).await
+    };
+    if let Some(id) = message.id {
+        let _ = completion.send((token, id, response)).await;
+    }
+}
+
+fn next_request_deadline(requests: &HashMap<u64, InFlightRequest>) -> Option<tokio::time::Instant> {
+    requests
+        .iter()
+        .filter(|(_, request)| !request.abandoned)
+        .filter_map(|(_, request)| request.deadline)
+        .min()
+}
+
+async fn abandon_request(
+    request_id: u64,
+    deadline_exceeded: bool,
+    requests: &mut HashMap<u64, InFlightRequest>,
+    outgoing: &mpsc::Sender<OutgoingFrame>,
+    byte_budget: &Arc<Semaphore>,
+) -> io::Result<()> {
+    let Some(mut request) = requests.remove(&request_id) else {
+        return Ok(());
+    };
+    let response_epoch = request.epoch;
+    let can_abort = request.cancel_safe || !request.started.load(Ordering::Acquire);
+    if can_abort {
+        request.task.abort();
+    } else {
+        request.abandoned = true;
+        requests.insert(request_id, request);
+    }
+    let error = if can_abort {
+        if deadline_exceeded {
+            RpcError::new("DeadlineExceeded", "request deadline exceeded").retryable(true)
+        } else {
+            RpcError::new("Canceled", "request canceled")
+        }
+    } else {
+        RpcError::new(
+            "OutcomeUnknown",
+            "request was abandoned after execution started; inspect the result before retrying",
+        )
+    };
+    queue_message(
+        outgoing,
+        byte_budget,
+        Message::response_error(request_id, response_epoch, error),
+    )
+    .await
 }
 
 fn hello_message(epoch: u64) -> Message {
@@ -1952,93 +3075,265 @@ fn hello_message(epoch: u64) -> Message {
 async fn run() -> io::Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let mut reader = stdin;
-    let writer = Arc::new(Mutex::new(stdout));
-    let mut state = State::new();
+    let mut frame_reader = FrameReader::new(stdin);
+    let (outgoing_tx, outgoing_rx) = mpsc::channel(MAX_EVENT_QUEUE);
+    let byte_budget = Arc::new(Semaphore::new(MAX_IPC_INFLIGHT_BYTES));
+    let mut writer_task = tokio::spawn(writer_loop(stdout, outgoing_rx));
+    let shared = Arc::new(Mutex::new(State::new()));
+    let mut ws_event_commands = shared
+        .lock()
+        .await
+        .ws_event_rx_rx
+        .take()
+        .expect("WS event command receiver missing");
+    let mut ws_events: Option<(u64, mpsc::Receiver<LcuEvent>)> = None;
+    let read_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));
+    let control_slots = Arc::new(Semaphore::new(1));
+    let (completion_tx, mut completion_rx) = mpsc::channel(MAX_PENDING_REQUESTS);
+    let mut requests: HashMap<u64, InFlightRequest> = HashMap::new();
+    let mut next_request_token = 0_u64;
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
 
-    write_message(&writer, &hello_message(0)).await?;
+    queue_message(&outgoing_tx, &byte_budget, hello_message(0)).await?;
 
     loop {
+        let next_deadline = next_request_deadline(&requests);
         tokio::select! {
-            message = read_message(&mut reader) => {
+            writer_result = &mut writer_task => {
+                writer_result??;
+                return Ok(());
+            }
+            command = ws_event_commands.recv() => {
+                if let Some((generation, receiver)) = command {
+                    ws_events = Some((generation, receiver));
+                }
+            }
+            event = async {
+                match ws_events.as_mut() {
+                    Some((_, receiver)) => receiver.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if ws_events.is_some() => {
+                if let Some(event) = event {
+                    let mut messages = Vec::new();
+                    {
+                        let mut state = shared.lock().await;
+                        state.ws_queue_len = ws_events.as_ref().map(|(_, events)| events.len()).unwrap_or(0);
+                        let generation = ws_events.as_ref().map(|(generation, _)| *generation).unwrap_or(0);
+                        if generation != state.epoch {
+                            continue;
+                        }
+                        state.metrics.events += 1;
+                        let topic = event_topic(&event);
+                        if topic == "champselect.changed" {
+                            if let Some(automation) = state.automation.as_mut() {
+                                let plans = automation.handle_event(&event.data);
+                                if !plans.is_empty() {
+                                    messages.push(Message::event(
+                                        state.epoch,
+                                        event.seq,
+                                        "automation.planned",
+                                        json!({ "plans": plans }),
+                                    ));
+                                }
+                            }
+                        }
+                        if topic == "entitlements.changed" {
+                            if let Some(token) = parse_sgp_token(&event.data) {
+                                apply_sgp_token_event(&mut state, token);
+                            }
+                        }
+                        let data = if topic == "champselect.changed" {
+                            json!({
+                                "uri": event.uri,
+                                "eventType": event.event_type,
+                                "data": event.data,
+                            })
+                        } else {
+                            event.data
+                        };
+                        messages.push(Message::event(state.epoch, event.seq, topic, data));
+                    }
+                    for message in messages {
+                        queue_message(&outgoing_tx, &byte_budget, message).await?;
+                    }
+                }
+            }
+            completed = completion_rx.recv() => {
+                let Some((token, request_id, response)) = completed else { break };
+                if requests
+                    .get(&request_id)
+                    .is_some_and(|request| request.token == token)
+                {
+                    let request = requests.remove(&request_id).unwrap();
+                    if !request.abandoned {
+                        queue_message(&outgoing_tx, &byte_budget, response).await?;
+                    }
+                    shared
+                        .lock()
+                        .await
+                        .metrics
+                        .record_latency(request.started_at.elapsed().as_micros() as u64);
+                }
+            }
+            _ = async {
+                match next_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let now = tokio::time::Instant::now();
+                let expired = requests
+                    .iter()
+                    .filter(|(_, request)| {
+                        !request.abandoned && request.deadline.is_some_and(|deadline| deadline <= now)
+                    })
+                    .map(|(id, _)| *id)
+                    .collect::<Vec<_>>();
+                for request_id in expired {
+                    abandon_request(
+                        request_id,
+                        true,
+                        &mut requests,
+                        &outgoing_tx,
+                        &byte_budget,
+                    )
+                    .await?;
+                }
+            }
+            message = frame_reader.next_message() => {
                 let Some(message) = message? else { break };
                 if let Err(error) = message.validate() {
+                    let epoch = shared.lock().await.epoch;
                     let response = Message::response_error(
                         message.id.unwrap_or(0),
-                        message.epoch.unwrap_or(state.epoch),
+                        message.epoch.unwrap_or(epoch),
                         RpcError::new("ProtocolError", error.to_string()),
                     );
-                    write_message(&writer, &response).await?;
+                    queue_message(&outgoing_tx, &byte_budget, response).await?;
                     continue;
                 }
 
                 match message.kind {
                     MessageKind::Hello => {
-                        state.epoch = state.epoch.max(message.epoch.unwrap_or(0));
-                        write_message(&writer, &hello_message(state.epoch)).await?;
+                        let epoch = {
+                            let mut state = shared.lock().await;
+                            state.epoch = state.epoch.max(message.epoch.unwrap_or(0));
+                            state.epoch
+                        };
+                        queue_message(&outgoing_tx, &byte_budget, hello_message(epoch)).await?;
                     }
                     MessageKind::Request => {
-                        let started = Instant::now();
-                        let response = handle_request(&message, &mut state).await;
-                        write_message(&writer, &response).await?;
-                        state.metrics.record_latency(started.elapsed().as_micros() as u64);
+                        let request_id = message.id.unwrap_or(0);
+                        if requests.contains_key(&request_id) {
+                            queue_message(
+                                &outgoing_tx,
+                                &byte_budget,
+                                Message::response_error(
+                                    request_id,
+                                    shared.lock().await.epoch,
+                                    RpcError::new("InvalidParams", "duplicate request id"),
+                                ),
+                            )
+                            .await?;
+                            continue;
+                        }
+                        if requests.len() >= MAX_PENDING_REQUESTS {
+                            queue_message(
+                                &outgoing_tx,
+                                &byte_budget,
+                                Message::response_error(
+                                    request_id,
+                                    shared.lock().await.epoch,
+                                    RpcError::new("ResourceDeferred", "too many pending requests")
+                                        .retryable(true),
+                                ),
+                            )
+                            .await?;
+                            continue;
+                        }
+                        let epoch = shared.lock().await.epoch;
+                        let deadline = message
+                            .deadline_ms
+                            .and_then(|milliseconds| tokio::time::Instant::now().checked_add(Duration::from_millis(milliseconds)));
+                        if deadline.is_some_and(|deadline| deadline <= tokio::time::Instant::now()) {
+                            queue_message(
+                                &outgoing_tx,
+                                &byte_budget,
+                                Message::response_error(
+                                    request_id,
+                                    epoch,
+                                    RpcError::new("DeadlineExceeded", "request deadline exceeded")
+                                        .retryable(true),
+                                ),
+                            )
+                            .await?;
+                            continue;
+                        }
+                        let started = Arc::new(AtomicBool::new(false));
+                        let cancel_safe = is_concurrent_read_op(message.op.as_deref().unwrap_or_default());
+                        next_request_token = next_request_token.wrapping_add(1);
+                        let token = next_request_token;
+                        let task = tokio::spawn(execute_request(
+                            message,
+                            Arc::clone(&shared),
+                            Arc::clone(&read_slots),
+                            Arc::clone(&control_slots),
+                            completion_tx.clone(),
+                            Arc::clone(&started),
+                            token,
+                        ));
+                        requests.insert(
+                            request_id,
+                            InFlightRequest {
+                                task,
+                                token,
+                                started,
+                                deadline,
+                                abandoned: false,
+                                cancel_safe,
+                                started_at: Instant::now(),
+                                epoch,
+                            },
+                        );
                     }
                     MessageKind::Ping => {
-                        write_message(&writer, &Message::pong(message.nonce.unwrap_or(0))).await?;
+                        queue_message(
+                            &outgoing_tx,
+                            &byte_budget,
+                            Message::pong(message.nonce.unwrap_or(0)),
+                        )
+                        .await?;
                     }
-                    MessageKind::Cancel => {}
+                    MessageKind::Cancel => {
+                        if let Some(request_id) = message.id {
+                            abandon_request(
+                                request_id,
+                                false,
+                                &mut requests,
+                                &outgoing_tx,
+                                &byte_budget,
+                            )
+                            .await?;
+                        }
+                    }
                     MessageKind::Shutdown => break,
                     _ => {}
-                }
-            }
-            event = receive_ws_event(&mut state), if state.ws_events.is_some() => {
-                if let Some(event) = event {
-                    state.metrics.events += 1;
-                    let topic = event_topic(&event);
-                    if topic == "champselect.changed" {
-                        if let Some(automation) = state.automation.as_mut() {
-                            let plans = automation.handle_event(&event.data);
-                            if !plans.is_empty() {
-                                let message = Message::event(
-                                    state.epoch,
-                                    event.seq,
-                                    "automation.planned",
-                                    json!({ "plans": plans }),
-                                );
-                                write_message(&writer, &message).await?;
-                            }
-                        }
-                    }
-                    if topic == "entitlements.changed" {
-                        if let Some(token) = event.data.get("accessToken").and_then(Value::as_str) {
-                            state.sgp_token = Some(Zeroizing::new(token.to_string()));
-                        }
-                    }
-                    let data = if topic == "champselect.changed" {
-                        json!({
-                            "uri": event.uri,
-                            "eventType": event.event_type,
-                            "data": event.data,
-                        })
-                    } else {
-                        event.data
-                    };
-                    let message = Message::event(
-                        state.epoch,
-                        event.seq,
-                        topic,
-                        data,
-                    );
-                    write_message(&writer, &message).await?;
                 }
             }
             _ = heartbeat.tick() => {}
         }
     }
 
+    for request in requests.values() {
+        request.task.abort();
+    }
+    drop(outgoing_tx);
+    writer_task.await??;
+
+    let mut state = shared.lock().await;
     if let Some(shutdown) = state.ws_shutdown.take() {
         let _ = shutdown.send(()).await;
     }
@@ -2054,5 +3349,413 @@ async fn main() {
     if let Err(error) = run().await {
         eprintln!("seraphine-sidecar: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frame_reader_preserves_partial_frames_when_polling_is_canceled() {
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        let first = encode(&Message::ping(1)).unwrap();
+        let second = encode(&Message::ping(2)).unwrap();
+        writer.write_all(&first[..2]).await.unwrap();
+        let mut frames = FrameReader::new(reader);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), frames.next_message())
+                .await
+                .is_err()
+        );
+        writer.write_all(&first[2..]).await.unwrap();
+        writer.write_all(&second).await.unwrap();
+        assert_eq!(frames.next_message().await.unwrap(), Some(Message::ping(1)));
+        assert_eq!(frames.next_message().await.unwrap(), Some(Message::ping(2)));
+    }
+
+    #[tokio::test]
+    async fn outgoing_writer_preserves_frame_order() {
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        let (outgoing, receiver) = mpsc::channel(2);
+        let budget = Arc::new(Semaphore::new(MAX_IPC_INFLIGHT_BYTES));
+        queue_message(&outgoing, &budget, Message::ping(1))
+            .await
+            .unwrap();
+        queue_message(&outgoing, &budget, Message::ping(2))
+            .await
+            .unwrap();
+        drop(outgoing);
+        writer_loop(&mut writer, receiver).await.unwrap();
+        drop(writer);
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).await.unwrap();
+        let first_length = decode_length_prefix(&bytes).unwrap().unwrap();
+        assert_eq!(
+            decode(&bytes[4..4 + first_length]).unwrap(),
+            Message::ping(1)
+        );
+        let offset = 4 + first_length;
+        let second_length = decode_length_prefix(&bytes[offset..]).unwrap().unwrap();
+        assert_eq!(
+            decode(&bytes[offset + 4..offset + 4 + second_length]).unwrap(),
+            Message::ping(2)
+        );
+        assert_eq!(bytes.len(), offset + 4 + second_length);
+    }
+
+    #[tokio::test]
+    async fn outgoing_byte_budget_applies_backpressure() {
+        let frame_size = encode(&Message::ping(1)).unwrap().len() as u32;
+        let budget = Arc::new(Semaphore::new(frame_size as usize));
+        let (outgoing, receiver) = mpsc::channel(2);
+        queue_message(&outgoing, &budget, Message::ping(1))
+            .await
+            .unwrap();
+        let (second_tx, second_budget) = (outgoing.clone(), Arc::clone(&budget));
+        let second = tokio::spawn(async move {
+            queue_message(&second_tx, &second_budget, Message::ping(2)).await
+        });
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!second.is_finished());
+        drop(receiver);
+        assert!(second.await.unwrap().is_err());
+    }
+
+    #[test]
+    fn cache_writes_atomically_replace_existing_files() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-cache-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("asset.png");
+        fs::write(&destination, b"old").unwrap();
+        write_file_atomic(&destination, b"new").unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_cache_replacement_preserves_destination() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-cache-failure-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("asset.png");
+        fs::create_dir(&destination).unwrap();
+        assert!(write_file_atomic(&destination, b"new").is_err());
+        assert!(destination.is_dir());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn asset_cache_keys_include_source_and_budget() {
+        let destination = Path::new("cache/asset.png");
+        let lcu = AssetSource::Lcu("/asset.png".to_string());
+        let external = AssetSource::External("https://example.com/asset.png".to_string());
+        assert_ne!(
+            lcu.cache_key(destination, 1024),
+            lcu.cache_key(destination, 2048)
+        );
+        assert_ne!(
+            lcu.cache_key(destination, 1024),
+            lcu.cache_key(Path::new("cache/other.png"), 1024)
+        );
+        assert_ne!(
+            lcu.cache_key(destination, 1024),
+            external.cache_key(destination, 1024)
+        );
+    }
+
+    #[test]
+    fn write_ledger_key_uses_full_operation_scope() {
+        let mut state = State::new();
+        state.connection = Some(ConnectionInfo {
+            pid: 42,
+            port: 55123,
+            server: "HN1".to_string(),
+            epoch: 7,
+        });
+        state.automation = Some(DryRunAutomation::new(7, "session-1", json!({})));
+        let data = json!({"type": "pick", "championId": 1});
+        let key = write_ledger_key(
+            &state,
+            7,
+            "operation-1",
+            "POST",
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&data),
+        );
+        assert_eq!(key.pid, 42);
+        assert_eq!(key.epoch, 7);
+        assert_eq!(key.session_id, "session-1");
+        assert_eq!(key.action_id, 10);
+        assert_eq!(key.action_type, "pick");
+        assert_eq!(key.config_revision, 0);
+        assert_eq!(key.operation_id, "operation-1");
+
+        state
+            .automation
+            .as_mut()
+            .unwrap()
+            .update_config(json!({"changed": true}));
+        let changed = write_ledger_key(
+            &state,
+            7,
+            "operation-1",
+            "POST",
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&data),
+        );
+        assert_ne!(key, changed);
+        assert_eq!(changed.config_revision, 1);
+    }
+
+    #[test]
+    fn sgp_token_parser_rejects_empty_values() {
+        assert_eq!(
+            parse_sgp_token(&json!({"accessToken": "token"})),
+            Some("token".to_string())
+        );
+        assert_eq!(parse_sgp_token(&json!({"accessToken": ""})), None);
+        assert_eq!(parse_sgp_token(&json!({})), None);
+        assert!(!sgp_rpc_error(LcuError::Unauthorized).retryable);
+
+        let mut state = State::new();
+        state.sgp_token = Some(Zeroizing::new("new-token".to_string()));
+        state.sgp_token_superseded = Some(Zeroizing::new("old-token".to_string()));
+        apply_sgp_token_event(&mut state, "old-token".to_string());
+        assert_eq!(
+            state.sgp_token.as_deref().map(String::as_str),
+            Some("new-token")
+        );
+        apply_sgp_token_event(&mut state, "newer-token".to_string());
+        assert_eq!(
+            state.sgp_token.as_deref().map(String::as_str),
+            Some("newer-token")
+        );
+        assert!(state.sgp_token_superseded.is_none());
+    }
+
+    #[tokio::test]
+    async fn sgp_refresh_skips_when_token_already_changed() {
+        let mut state = State::new();
+        state.sgp_token = Some(Zeroizing::new("new-token".to_string()));
+        let previous = Zeroizing::new("old-token".to_string());
+        refresh_sgp_token(&mut state, &previous).await.unwrap();
+        assert_eq!(state.sgp_refresh_count, 0);
+        assert_eq!(
+            state.sgp_token.as_deref().map(String::as_str),
+            Some("new-token")
+        );
+    }
+
+    #[test]
+    fn write_request_hash_detects_operation_reuse_conflicts() {
+        let first = write_request_hash(
+            "POST",
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&json!({"championId": 1})),
+        );
+        let changed_body = write_request_hash(
+            "POST",
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&json!({"championId": 2})),
+        );
+        let changed_method = write_request_hash(
+            "PUT",
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&json!({"championId": 1})),
+        );
+        assert_ne!(first, changed_body);
+        assert_ne!(first, changed_method);
+        assert_ne!(
+            write_request_hash("POST", "/actions/10", None),
+            write_request_hash("POST", "/actions/10", Some(&Value::Null))
+        );
+    }
+
+    #[test]
+    fn failed_http_write_can_complete_after_readback() {
+        let key = WriteLedgerKey {
+            pid: 1,
+            epoch: 1,
+            session_id: "session".to_string(),
+            action_id: 10,
+            action_type: "pick".to_string(),
+            config_revision: 0,
+            operation_id: "operation".to_string(),
+        };
+        let mut ledger = HashMap::new();
+        let request_hash =
+            write_request_hash("POST", "/actions/10", Some(&json!({"championId": 1})));
+        let result = finish_write(
+            &mut ledger,
+            key.clone(),
+            request_hash,
+            Ok(()),
+            Value::Null,
+            Some("HTTP 500"),
+        )
+        .unwrap();
+        assert_eq!(result["confirmedAfterError"], true);
+        assert_eq!(
+            ledger.get(&key).map(|entry| entry.state),
+            Some(AutomationState::Completed)
+        );
+    }
+
+    #[test]
+    fn persistent_write_guards_round_trip_without_raw_ids() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-write-guards-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.json");
+        let mut state = State::new();
+        state.write_guard_path = path.clone();
+        state.write_guard_error = None;
+        state.write_guards.clear();
+        let operation = operation_guard_key(42, "operation-secret");
+        let request_hash =
+            write_request_hash("POST", "/actions/10", Some(&json!({"championId": 1})));
+        persist_write_guard(&mut state, operation.clone(), request_hash, false).unwrap();
+        let payload = fs::read_to_string(&path).unwrap();
+        assert!(!payload.contains("operation-secret"));
+        assert!(!payload.contains("session-1"));
+        let (loaded, error) = load_write_guards(&path);
+        assert!(error.is_none());
+        assert!(!loaded[&operation].completed);
+
+        persist_write_guard(&mut state, operation.clone(), request_hash, true).unwrap();
+        let (loaded, error) = load_write_guards(&path);
+        assert!(error.is_none());
+        assert!(loaded[&operation].completed);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn persistent_write_guards_merge_across_sidecar_instances() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-write-guards-merge-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.json");
+        let mut first = State::new();
+        first.write_guard_path = path.clone();
+        first.write_guard_error = None;
+        first.write_guards.clear();
+        let mut second = State::new();
+        second.write_guard_path = path.clone();
+        second.write_guard_error = None;
+        second.write_guards.clear();
+        let first_operation = operation_guard_key(1, "first");
+        let second_operation = operation_guard_key(1, "second");
+        let request_hash = write_request_hash("POST", "/actions/10", None);
+        persist_write_guard(&mut first, first_operation.clone(), request_hash, false).unwrap();
+        persist_write_guard(&mut second, second_operation.clone(), request_hash, false).unwrap();
+        let (loaded, error) = load_write_guards(&path);
+        assert!(error.is_none());
+        assert_eq!(loaded.len(), 2);
+
+        persist_write_guard(&mut first, first_operation.clone(), request_hash, true).unwrap();
+        persist_write_guard(&mut second, first_operation.clone(), request_hash, false).unwrap();
+        let (loaded, error) = load_write_guards(&path);
+        assert!(error.is_none());
+        assert!(loaded[&first_operation].completed);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn only_one_sidecar_can_claim_a_write() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-write-claim-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.json");
+        let mut first = State::new();
+        first.write_guard_path = path.clone();
+        first.write_guard_error = None;
+        first.write_guards.clear();
+        let mut second = State::new();
+        second.write_guard_path = path;
+        second.write_guard_error = None;
+        second.write_guards.clear();
+        let operation = operation_guard_key(1, "shared-operation");
+        let request_hash = write_request_hash("POST", "/actions/10", None);
+        assert!(matches!(
+            claim_write_guard(&mut first, operation.clone(), request_hash),
+            Ok(WriteGuardClaim::Leader)
+        ));
+        assert!(matches!(
+            claim_write_guard(&mut second, operation.clone(), request_hash),
+            Ok(WriteGuardClaim::Existing(false))
+        ));
+        persist_write_guard(&mut first, operation.clone(), request_hash, true).unwrap();
+        assert!(matches!(
+            claim_write_guard(&mut second, operation, request_hash),
+            Ok(WriteGuardClaim::Existing(true))
+        ));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn corrupt_write_guards_fail_closed() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-write-guards-invalid-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.json");
+        fs::write(&path, b"not-json").unwrap();
+        let (guards, error) = load_write_guards(&path);
+        assert!(guards.is_empty());
+        assert!(error.is_some());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_confirmation_is_outcome_unknown() {
+        let key = WriteLedgerKey {
+            pid: 1,
+            epoch: 1,
+            session_id: "session".to_string(),
+            action_id: 10,
+            action_type: "pick".to_string(),
+            config_revision: 0,
+            operation_id: "operation".to_string(),
+        };
+        let mut ledger = HashMap::new();
+        let request_hash =
+            write_request_hash("POST", "/actions/10", Some(&json!({"championId": 1})));
+        let error = finish_write(
+            &mut ledger,
+            key.clone(),
+            request_hash,
+            Err(RpcError::new("InvalidState", "mismatch")),
+            Value::Null,
+            Some("HTTP 500"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "OutcomeUnknown");
+        assert_eq!(
+            ledger.get(&key).map(|entry| entry.state),
+            Some(AutomationState::OutcomeUnknown)
+        );
     }
 }

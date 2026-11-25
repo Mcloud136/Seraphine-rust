@@ -43,6 +43,7 @@ class SidecarClient:
         self.stderr_task = None
         self.write_lock = asyncio.Lock()
         self.pending = {}
+        self._pending_slots = asyncio.Semaphore(protocol.MAX_PENDING_REQUESTS)
         self.events = asyncio.Queue(maxsize=self.event_queue_size)
         self.stderr_lines = deque(maxlen=64)
         self.closed = True
@@ -259,34 +260,38 @@ class SidecarClient:
 
     async def call(self, op, args=None, timeout=15.0):
         await self.start()
-        if len(self.pending) >= protocol.MAX_PENDING_REQUESTS:
-            raise protocol.ProtocolError("too many pending requests")
-        request_id = self._next_id
-        self._next_id = (self._next_id + 1) & 0x7FFFFFFF
-        future = asyncio.get_running_loop().create_future()
-        deadline_ms = max(1, int(timeout * 1000))
-        request_message = protocol.request(
-            request_id,
-            self.epoch,
-            op,
-            {} if args is None else args,
-            deadline_ms,
-        )
-        request_size = self._message_size(request_message)
-        if request_size > protocol.MAX_REQUEST_BYTES:
-            raise protocol.ProtocolError("request is too large")
-        if self._inflight_bytes + request_size > protocol.MAX_IPC_INFLIGHT_BYTES:
-            raise protocol.ProtocolError("IPC in-flight byte budget exceeded")
-        self.pending[request_id] = (future, request_size)
-        self._inflight_bytes += request_size
-        try:
-            await self._send(request_message)
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            await self._send(protocol.cancel(request_id))
-            raise
-        finally:
-            self._take_pending(request_id)
+        return await asyncio.wait_for(self._call(op, args, timeout), timeout=timeout)
+
+    async def _call(self, op, args=None, timeout=15.0):
+        async with self._pending_slots:
+            if len(self.pending) >= protocol.MAX_PENDING_REQUESTS:
+                raise protocol.ProtocolError("too many pending requests")
+            request_id = self._next_id
+            self._next_id = (self._next_id + 1) & 0x7FFFFFFF
+            future = asyncio.get_running_loop().create_future()
+            deadline_ms = max(1, int(timeout * 1000))
+            request_message = protocol.request(
+                request_id,
+                self.epoch,
+                op,
+                {} if args is None else args,
+                deadline_ms,
+            )
+            request_size = self._message_size(request_message)
+            if request_size > protocol.MAX_REQUEST_BYTES:
+                raise protocol.ProtocolError("request is too large")
+            if self._inflight_bytes + request_size > protocol.MAX_IPC_INFLIGHT_BYTES:
+                raise protocol.ProtocolError("IPC in-flight byte budget exceeded")
+            self.pending[request_id] = (future, request_size)
+            self._inflight_bytes += request_size
+            try:
+                await self._send(request_message)
+                return await future
+            except asyncio.TimeoutError:
+                await self._send(protocol.cancel(request_id))
+                raise
+            finally:
+                self._take_pending(request_id)
 
     async def health(self):
         return await self.call("health")

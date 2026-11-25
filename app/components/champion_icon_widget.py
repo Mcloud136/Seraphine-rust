@@ -1,22 +1,20 @@
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal, pyqtSlot, QRectF, QSize
-from PyQt5.QtGui import (QColor, QImage, QMouseEvent, QPainter, QPainterPath, QLinearGradient, QGradient,
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal, QRectF, QSize
+from PyQt5.QtGui import (QColor, QMouseEvent, QPainter, QPainterPath, QLinearGradient, QGradient,
                          QPen, QPixmap, qGray, qAlpha, qRgba)
 from PyQt5.QtWidgets import QWidget, QFrame, QLabel, QGraphicsOpacityEffect
 
-from app.backend.image_pool import get_image_pool
+from app.backend.image_pool import AsyncImageMixin
 from app.common.qfluentwidgets import isDarkTheme
 
 import time
 
 
-class RoundIcon(QFrame):
+class RoundIcon(AsyncImageMixin, QFrame):
     def __init__(self, icon=None, diameter=None, overscaled=0,
                  borderWidth=1, drawBackground=False, enabled=True, parent=None) -> None:
         super().__init__(parent)
         self.image = QPixmap()
-        self._iconKey = None
-        self._imagePool = get_image_pool()
-        self._imagePool.imageReady.connect(self._onImageReady)
+        self._initAsyncImage("round-icon", QSize(diameter or 64, diameter or 64))
 
         self.overscaled = overscaled
         self.borderWidth = borderWidth
@@ -28,12 +26,14 @@ class RoundIcon(QFrame):
         if icon is not None:
             self.setIcon(icon)
 
-    @pyqtSlot(str, QImage)
-    def _onImageReady(self, key, image):
-        if key != self._iconKey:
-            return
+    def _acceptAsyncImage(self, image):
         self.image = QPixmap.fromImage(image)
         self.havePic = True
+        self.update()
+
+    def _clearAsyncImage(self):
+        self.image = QPixmap()
+        self.havePic = False
         self.update()
 
     def paintEvent(self, event) -> None:
@@ -80,9 +80,7 @@ class RoundIcon(QFrame):
         return super().paintEvent(event)
 
     def setIcon(self, icon):
-        dpr = self.devicePixelRatioF()
-        self._iconKey = f"round-icon:{icon}:{self.width()}:{dpr:.2f}"
-        self._imagePool.submit(self._iconKey, icon, self.width(), self.height(), dpr)
+        self.setAsyncImage(icon)
 
     def setEnabeld(self, enabled):
         self.enabled = enabled
@@ -90,13 +88,14 @@ class RoundIcon(QFrame):
         self.repaint()
 
 
-class RoundIconButton(QFrame):
+class RoundIconButton(AsyncImageMixin, QFrame):
     clicked = pyqtSignal(int)
 
     def __init__(self, icon, diameter, overscaled, borderWidth, championName, championId, parent=None) -> None:
         super().__init__(parent)
 
-        self.image = QPixmap(icon)
+        self.image = QPixmap()
+        self._initAsyncImage("round-icon-button", QSize(diameter, diameter))
 
         self.borderWidth = borderWidth
         self.overscaled = overscaled
@@ -108,6 +107,15 @@ class RoundIconButton(QFrame):
         self.isHover = False
 
         self.setFixedSize(diameter, diameter)
+        self.setAsyncImage(icon)
+
+    def _acceptAsyncImage(self, image):
+        self.image = QPixmap.fromImage(image)
+        self.update()
+
+    def _clearAsyncImage(self):
+        self.image = QPixmap()
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -166,16 +174,47 @@ class RoundIconButton(QFrame):
         return ret
 
 
-class TopRoundedLabel(QLabel):
+class AsyncPixmapLabel(AsyncImageMixin, QLabel):
+    def __init__(self, imagePath=None, target_size=None, parent=None):
+        super().__init__(parent)
+        self._initAsyncImage("pixmap-label", target_size=target_size)
+        if imagePath is not None:
+            self.setPicture(imagePath)
+
+    def _acceptAsyncImage(self, image):
+        self.setPixmap(QPixmap.fromImage(image))
+
+    def _clearAsyncImage(self):
+        self.setPixmap(QPixmap())
+
+    def setPicture(self, imagePath):
+        if isinstance(imagePath, QPixmap):
+            self.cancelAsyncImage()
+            self.setPixmap(imagePath)
+            return
+        self.setAsyncImage(imagePath)
+
+    def setText(self, text):
+        self.cancelAsyncImage()
+        return super().setText(text)
+
+    def clear(self):
+        self.cancelAsyncImage()
+        return super().clear()
+
+
+class TopRoundedLabel(AsyncImageMixin, QLabel):
     def __init__(self, imagePath=None, radius=4.0, parent=None):
         super().__init__(parent)
-        self.setPixmap(QPixmap(imagePath))
+        self._initAsyncImage("top-rounded", use_widget_size=True)
 
-        self.havePic = imagePath != None
+        self.havePic = False
         self.radius = radius
 
         self.opacity = QGraphicsOpacityEffect(opacity=1)
         self.setGraphicsEffect(self.opacity)
+        if imagePath is not None:
+            self.setPicture(imagePath)
 
     def paintEvent(self, e):
         if not self.havePic:
@@ -210,32 +249,50 @@ class TopRoundedLabel(QLabel):
 
         painter.drawPixmap(self.rect(), pixmap)
 
-    def setPicture(self, imagePath):
+    def _acceptAsyncImage(self, image):
+        self.setPixmap(QPixmap.fromImage(image))
         self.havePic = True
-
-        self.setPixmap(QPixmap(imagePath))
         self.repaint()
+
+    def _clearAsyncImage(self):
+        self.setPixmap(QPixmap())
+        self.havePic = False
+        self.repaint()
+
+    def setPicture(self, imagePath):
+        if isinstance(imagePath, QPixmap):
+            self.cancelAsyncImage()
+            self.setPixmap(imagePath)
+            self.havePic = not imagePath.isNull()
+            self.repaint()
+            return
+        self.setAsyncImage(imagePath)
 
     def setRedius(self, radius):
         self.radius = radius
         self.repaint()
 
     def setText(self, text):
-        self.havePic = False
-
+        self.cancelAsyncImage()
         return super().setText(text)
 
+    def clear(self):
+        self.cancelAsyncImage()
+        return super().clear()
 
-class RoundedLabel(QLabel):
+
+class RoundedLabel(AsyncImageMixin, QLabel):
     def __init__(self, imagePath=None, radius=4.0, borderWidth=2, borderColor: QColor = None, drawBackground=False, parent=None):
         super().__init__(parent)
-        self.setPixmap(QPixmap(imagePath))
+        self._initAsyncImage("rounded-label")
 
-        self.havePic = imagePath != None
+        self.havePic = False
         self.radius = radius
         self.borderWidth = borderWidth
         self.borderColor = borderColor if borderColor else QColor(120, 90, 40)
         self.drawBackground = drawBackground
+        if imagePath is not None:
+            self.setPicture(imagePath)
 
     def paintEvent(self, e):
         if not self.havePic:
@@ -270,32 +327,46 @@ class RoundedLabel(QLabel):
             painter.drawRoundedRect(
                 QRectF(self.rect()), self.radius, self.radius)
 
-    def setPicture(self, imagePath):
+    def _acceptAsyncImage(self, image):
+        self.setPixmap(QPixmap.fromImage(image))
         self.havePic = True
-
-        self.setPixmap(QPixmap(imagePath))
         self.repaint()
+
+    def _clearAsyncImage(self):
+        self.setPixmap(QPixmap())
+        self.havePic = False
+        self.repaint()
+
+    def setPicture(self, imagePath):
+        if isinstance(imagePath, QPixmap):
+            self.cancelAsyncImage()
+            self.setPixmap(imagePath)
+            self.havePic = not imagePath.isNull()
+            self.repaint()
+            return
+        self.setAsyncImage(imagePath)
 
     def setRedius(self, radius):
         self.radius = radius
         self.repaint()
 
     def setText(self, text):
-        self.havePic = False
-
+        self.cancelAsyncImage()
         return super().setText(text)
 
+    def clear(self):
+        self.cancelAsyncImage()
+        return super().clear()
 
-class SummonerSpellButton(QFrame):
+
+class SummonerSpellButton(AsyncImageMixin, QFrame):
     clicked = pyqtSignal(int)
 
     def __init__(self, imagePath=None, spellId=None, parent=None):
         super().__init__(parent)
 
-        if imagePath:
-            self.image = QPixmap(imagePath)
-        else:
-            self.image = None
+        self.image = QPixmap()
+        self._initAsyncImage("summoner-spell")
 
         self.spellId = spellId
         self.radius = 5.0
@@ -305,6 +376,16 @@ class SummonerSpellButton(QFrame):
         self.isPressed = False
         self.isHovered = False
         self.enabled = True
+        if imagePath:
+            self.setPicture(imagePath)
+
+    def _acceptAsyncImage(self, image):
+        self.image = QPixmap.fromImage(image)
+        self.update()
+
+    def _clearAsyncImage(self):
+        self.image = QPixmap()
+        self.update()
 
     def paintEvent(self, e):
         if not self.image:
@@ -341,7 +422,7 @@ class SummonerSpellButton(QFrame):
         return super().paintEvent(e)
 
     def setPicture(self, path):
-        self.image = QPixmap(path)
+        self.setAsyncImage(path)
 
     def setSpellId(self, id):
         self.spellId = id

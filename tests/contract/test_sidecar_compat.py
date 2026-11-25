@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.backend.compat import SidecarConnector
+from app.lol.match_history import extract_match_history_games
 
 
 class FakeClient:
@@ -24,7 +25,7 @@ class FakeClient:
         if path.endswith("/currentpage"):
             return {"id": 7, "isDeletable": True}
         if "/lol-match-history/v1/products/lol/" in path:
-            return {"gameCount": 1, "games": [{"gameId": 1}]}
+            return {"gameCount": 1, "games": {"games": [{"gameId": 1}]}}
         if "/lol-match-history/v1/products/tft/" in path:
             return {"gameCount": 1, "games": [{"json": {}}]}
         if "/lol-ranked/v1/ranked-stats/" in path:
@@ -39,11 +40,19 @@ class SidecarCompatTests(unittest.IsolatedAsyncioTestCase):
         self.connector = SidecarConnector.__new__(SidecarConnector)
         self.connector.client = FakeClient()
 
+    def test_connector_exposes_legacy_call_stack(self):
+        connector = SidecarConnector()
+        self.assertEqual(list(connector.callStack), [])
+
     async def test_history_methods_return_legacy_lists(self):
         games = await self.connector.getSummonerGamesByPuuid("puuid")
         tft = await self.connector.getTftGamesByPuuid("puuid")
         self.assertEqual(games, [{"gameId": 1}])
         self.assertEqual(tft, [{"json": {}}])
+
+    def test_legacy_match_history_shape_is_supported(self):
+        games = [{"gameId": 1}]
+        self.assertEqual(extract_match_history_games({"games": games}), games)
 
     async def test_legacy_not_found_exceptions_are_preserved(self):
         from app.lol.exceptions import SummonerRankInfoNotFound

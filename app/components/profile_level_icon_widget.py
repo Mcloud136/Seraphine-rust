@@ -1,12 +1,12 @@
 import sys
 
 from PyQt5.QtCore import (Qt, QRectF, QPoint, QPropertyAnimation, QParallelAnimationGroup,
-                          QEasingCurve, QSize, QRect, pyqtSlot)
-from PyQt5.QtGui import QHideEvent, QPainter, QPainterPath, QPen, QFont, QPixmap, QColor, QImage
+                          QEasingCurve, QSize, QRect)
+from PyQt5.QtGui import QHideEvent, QPainter, QPainterPath, QPen, QFont, QPixmap, QColor
 from PyQt5.QtWidgets import (QWidget, QApplication, QMainWindow, QHBoxLayout,
                              QLabel, QVBoxLayout, QGridLayout, QFrame, QGraphicsDropShadowEffect)
 
-from app.backend.image_pool import get_image_pool
+from app.backend.image_pool import AsyncImageMixin
 from app.lol.aram import AramBuff
 from app.common.qfluentwidgets import (ProgressRing, ToolTipFilter, ToolTipPosition, isDarkTheme,
                                        themeColor, FlyoutViewBase, TextWrap, FlyoutAnimationType)
@@ -56,7 +56,7 @@ class ProgressArc(ProgressRing):
         painter.drawText(text_rect, Qt.AlignCenter, f"{self.text}")
 
 
-class RoundLevelAvatar(QWidget):
+class RoundLevelAvatar(AsyncImageMixin, QWidget):
     def __init__(self,
                  icon,
                  xpSinceLastLevel,
@@ -70,9 +70,8 @@ class RoundLevelAvatar(QWidget):
         self.sep = .3 * diameter
         self.iconPath = icon
         self.image = QPixmap()
-        self._iconKey = None
-        self._imagePool = get_image_pool()
-        self._imagePool.imageReady.connect(self._onImageReady)
+        self._initAsyncImage(
+            "level-avatar", target_size=QSize(diameter, diameter))
 
         self.setFixedSize(self.diameter, self.diameter)
         self._submitIcon()
@@ -94,21 +93,14 @@ class RoundLevelAvatar(QWidget):
         self.aramInfo = aramInfo
 
     def _submitIcon(self):
-        dpr = self.devicePixelRatioF()
-        self._iconKey = f"level-avatar:{self.iconPath}:{self.diameter}:{dpr:.2f}"
-        self._imagePool.submit(
-            self._iconKey,
-            self.iconPath,
-            self.diameter,
-            self.diameter,
-            dpr,
-        )
+        self.setAsyncImage(self.iconPath)
 
-    @pyqtSlot(str, QImage)
-    def _onImageReady(self, key, image):
-        if key != self._iconKey:
-            return
+    def _acceptAsyncImage(self, image):
         self.image = QPixmap.fromImage(image)
+        self.update()
+
+    def _clearAsyncImage(self):
+        self.image = QPixmap()
         self.update()
 
     def paintEvent(self, event):

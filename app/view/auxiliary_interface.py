@@ -23,6 +23,7 @@ from app.components.champion_icon_widget import RoundIcon, SummonerSpellButton
 from app.components.message_box import MultiChampionSelectMsgBox
 from app.components.multi_champion_select import ChampionSelectFlyout, SplashesFlyout
 from app.components.seraphine_interface import SeraphineInterface
+from app.components.setting_cards import HeaderStatusLabel
 from app.components.summoner_spell_widget import SummonerSpellSelectFlyout
 from app.lol.connector import connector
 from app.lol.exceptions import *
@@ -956,7 +957,7 @@ class AutoAcceptMatchingCard(ExpandGroupSettingCard):
                  delayConfigItem: ConfigItem = None, parent=None):
         super().__init__(Icon.CIRCLEMARK, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.inputWidget = QWidget(self.view)
         self.inputLayout = QHBoxLayout(self.inputWidget)
@@ -1035,7 +1036,7 @@ class AutoAcceptSwapingCard(ExpandGroupSettingCard):
                  enableChampSwapItem: ConfigItem = None, parent=None):
         super().__init__(Icon.TEXTCHECK, title, content, parent)
 
-        self.statusLabel = QLabel(self)
+        self.statusLabel = HeaderStatusLabel(self)
 
         self.switchButtonWidget = QWidget(self.view)
         self.switchButtonLayout = QGridLayout(self.switchButtonWidget)
@@ -1277,7 +1278,7 @@ class AutoSelectChampionCard(ExpandGroupSettingCard):
         self.supChampionsConfigItem = supChampionsConfigItem
         self.enableTimeoutCompleteCfgItem = enableTimeoutCompleteCfgItem
 
-        self.statusLabel = QLabel()
+        self.statusLabel = HeaderStatusLabel()
 
         self.defaultCfgWidget = QWidget(self.view)
         self.defaultCfgLayout = QGridLayout(self.defaultCfgWidget)
@@ -1541,7 +1542,7 @@ class AutoBanChampionCard(ExpandGroupSettingCard):
         self.friendlyConfigItem = friendlyConfigItem
         self.delayTimeConfigItem = delayTimeConfigItem
 
-        self.statusLabel = QLabel()
+        self.statusLabel = HeaderStatusLabel()
 
         self.defaultCfgWidget = QWidget(self.view)
         self.defaultCfgLayout = QGridLayout(self.defaultCfgWidget)
@@ -1897,7 +1898,7 @@ class AutoSetSummonerSpellCard(ExpandGroupSettingCard):
         self.botSpellConfigItem = botSpellConfigItem
         self.supSpellConfigItem = supSpellConfigItem
 
-        self.statusLabel = QLabel()
+        self.statusLabel = HeaderStatusLabel()
 
         self.defaultCfgWidget = QWidget(self.view)
         self.defaultCfgLayout = QGridLayout(self.defaultCfgWidget)

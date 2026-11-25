@@ -72,6 +72,8 @@ seraphine
 /catalog.json
 /AramBuff.json
 /ChampionAlias.json
+/write-guards.json
+/write-guards.lock
 /filelist.txt
 /update-manifest.json
 

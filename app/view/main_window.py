@@ -13,7 +13,7 @@ from aiohttp.client_exceptions import ClientConnectorError
 from qasync import asyncClose, asyncSlot
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QEvent, QTimer, QPoint
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
+from PyQt5.QtWidgets import QApplication, QLabel, QSystemTrayIcon
 
 from app.common.qfluentwidgets import (NavigationItemPosition, InfoBar, InfoBarPosition, Action,
                                        FluentWindow, SplashScreen, MessageBox, SmoothScrollArea,
@@ -34,6 +34,7 @@ from app.common.icons import Icon
 from app.common.config import cfg, VERSION, BETA
 from app.common.logger import logger
 from app.common.signals import signalBus
+from app.backend.protocol import ProtocolError, RpcError
 from app.components.message_box import (UpdateMessageBox, NoticeMessageBox,
                                         WaitingForLolMessageBox, ExceptionMessageBox,
                                         ChangeDpiMessageBox)
@@ -105,17 +106,28 @@ class MainWindow(FluentWindow):
 
         self.__initInterface()
         self.__initNavigation()
-        self.__initListener()
         self.__conncetSignalToSlot()
+        self.__initListener()
         self.__autoStartLolClient()
 
         self.splashScreen.finish()
 
         self.opggWindow = OpggWindow()
+        self.__normalizeLabelFonts()
 
         logger.critical("Seraphine initialized", TAG)
 
         self.__silentStart()
+
+    def __normalizeLabelFonts(self):
+        reference_font = self.settingInterface.apiConcurrencyCount.card.titleLabel.font()
+        for widget in QApplication.allWidgets():
+            font = widget.font()
+            if isinstance(widget, QLabel) and (
+                not font.family()
+                or (font.pointSize() <= 0 and font.pixelSize() <= 0)
+            ):
+                widget.setFont(reference_font)
 
     def __initConfig(self):
         folder = cfg.get(cfg.lolFolder)
@@ -447,7 +459,7 @@ class MainWindow(FluentWindow):
             lambda: showAndSwitch(self.settingInterface))
         quitAction.triggered.connect(quit)
 
-        self.trayMenu = TmpSystemTrayMenu(self)
+        self.trayMenu = TmpSystemTrayMenu(parent=self)
 
         self.trayMenu.addAction(careerAction)
         self.trayMenu.addAction(searchAction)
@@ -927,6 +939,9 @@ class MainWindow(FluentWindow):
 
     # 进入游戏后触发
     async def __onGameStart(self):
+        if cfg.get(cfg.enableGameStartMinimize):
+            self.hide()
+
         session = await connector.getGameflowSession()
         currentSummonerId = self.currentSummoner['summonerId']
 
@@ -1056,9 +1071,39 @@ class MainWindow(FluentWindow):
         if ty in [ConnectionRefusedError, ClientConnectorError]:
             return
 
+        if isinstance(value, RpcError) and value.code == "WriteDisabled":
+            logger.warning("LCU write ignored because writes are disabled", TAG)
+            if not getattr(self, "_writeDisabledNoticeShown", False):
+                InfoBar.warning(
+                    title=self.tr("LCU writes are disabled"),
+                    content=self.tr("The operation was not sent to the League client."),
+                    orient=Qt.Vertical,
+                    isClosable=True,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                    parent=self,
+                )
+                self._writeDisabledNoticeShown = True
+            return
+
+        if isinstance(value, ProtocolError):
+            logger.warning(f"Transient sidecar protocol error: {value}", TAG)
+            if not getattr(self, "_protocolNoticeShown", False):
+                InfoBar.warning(
+                    title=self.tr("Sidecar request deferred"),
+                    content=self.tr("The request will be retried after the sidecar recovers."),
+                    orient=Qt.Vertical,
+                    isClosable=True,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                    parent=self,
+                )
+                self._protocolNoticeShown = True
+            return
+
         logger.error(f"Exception occurred:\n{content}", "Crash")
 
-        for call in connector.callStack:
+        for call in getattr(connector, "callStack", ()):
             logger.error(call, "Crash")
 
         # interfaces may not exist yet if the crash happened during __init__
@@ -1070,6 +1115,7 @@ class MainWindow(FluentWindow):
 
         content = f"Seraphine ver.{BETA or VERSION}\n{'-'*5}\n{content}"
 
+        self.splashScreen.close()
         w = ExceptionMessageBox(title, content, self.window())
 
         if w.exec():
