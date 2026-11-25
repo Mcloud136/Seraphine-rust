@@ -30,7 +30,7 @@ class WindowsApiProcessTests(unittest.TestCase):
         )
         self.assertEqual(
             _parse_lcu_command_line(command_line),
-            ("55123", "secret", "HN1"),
+            ("55123", "test-token", "HN1"),
         )
 
     def test_psutil_failure_falls_back_to_peb(self):

@@ -348,7 +348,10 @@ cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --b
 
 ### 10.4 Python 测试
 
+先构建 release sidecar/updater，再运行契约测试：
+
 ```powershell
+cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
 $env:QT_QPA_PLATFORM = "offscreen"
 python -m unittest discover -s tests/contract -v
 ```
@@ -391,3 +394,59 @@ python -m unittest discover -s tests/contract -v
 8. 完成政策审批后再评估真实写入。
 9. 全部硬门槛通过后观察 7 天，再切换默认后端。
 10. 最后清理旧 Python 网络/解析实现。
+
+---
+
+## 13. AI 接手操作清单
+
+### 13.1 必读顺序
+
+1. 本开发文档。
+2. `app/backend/protocol.py` 与 `rust/crates/protocol/src/lib.rs`。
+3. `app/backend/sidecar_client.py` 与 `rust/sidecar/src/main.rs`。
+4. `app/backend/compat.py`、`app/backend/catalog.py`。
+5. `rust/crates/lcu/src/websocket.rs`、`rust/crates/lcu/src/cache.rs`。
+6. `tests/contract/` 与 `tests/bench/`。
+
+### 13.2 开发环境
+
+- Windows 10/11 x64。
+- Python 3.8。
+- Rust stable x86_64-pc-windows-msvc。
+- Visual Studio Build Tools，包含 MSVC 和 Windows SDK。
+- 不需要安装 WinUI 3 才能完成当前 sidecar 路线。
+- spike 目录只用于历史技术验证，不应作为主程序依赖。
+
+### 13.3 第一次验证
+
+在仓库根目录执行：
+
+```powershell
+cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
+cargo clippy --manifest-path .\rust\Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path .\rust\Cargo.toml --workspace
+cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m unittest discover -s tests/contract -v
+```
+
+预期：Rust 37 项通过；Python 36 项通过、1 项真实 LCU 测试在未配置环境变量时跳过。
+
+### 13.4 修改约束
+
+- IPC 字段变更必须同步修改 Python 与 Rust 两侧。
+- 新增外部端点必须加入主机白名单、超时和字节预算。
+- 新增写操作必须默认关闭，并具备写前验证、写后确认和 `OutcomeUnknown` 处理。
+- 新增 UI 异步任务必须处理取消、世代号和慢消费者。
+- 不得把真实 token、PUUID、本地路径或运行时响应写入 fixture、日志或文档。
+- 每完成一个阶段，更新本文档的“已完成”“未完成”和“已验证数据”。
+
+### 13.5 当前最优先工作
+
+1. 修复并验证 PyInstaller 整包。
+2. 完善 sidecar IPC 并发、取消、deadline 和独立 writer。
+3. 完善 SGP 401 刷新、安全重试与写台账完整作用域。
+4. 完成 sidecar 模式完整 UI 灰度。
+5. 完成真实游戏 PresentMon/WPR 验收和外部 TLS 内存优化。
+
+在这些工作完成前，不要把默认后端从 `python` 切换为 `sidecar`，不要启用真实 LCU 写入。

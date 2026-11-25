@@ -15,6 +15,13 @@
 
 </div>
 
+## Rust Sidecar 开发分支
+
+当前仓库包含保留 PyQt UI、将网络与解析迁移到独立 Rust sidecar 的实现。默认后端仍为 `python`，尚未达到发布切换条件。
+
+- [设计与开发进度文档](Seraphine-Rust-开发文档.md)
+- [English README](readme.md)
+
 ## 快速上手 🤗
 ### 直接使用打包好的程序
 点击[这里](https://github.com/Miuguel/Seraphine/releases/latest)进入发布页面，在下方找到资源中的 `Seraphine.7z`，点击下载并解压至文件夹中，双击运行其中的 `Seraphine.exe` 即可。

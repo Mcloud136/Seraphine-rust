@@ -313,9 +313,9 @@ mod tests {
         assert_eq!(parsed.port, Some(55123));
         assert_eq!(
             parsed.token.as_ref().map(|token| token.as_str()),
-            Some("secret")
+            Some("test-token")
         );
         assert_eq!(parsed.server.as_deref(), Some("HN1"));
-        assert!(!format!("{:?}", parsed.redacted()).contains("secret"));
+        assert!(!format!("{:?}", parsed.redacted()).contains("test-token"));
     }
 }
