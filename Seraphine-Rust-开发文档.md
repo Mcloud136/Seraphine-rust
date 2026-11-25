@@ -297,6 +297,7 @@ tests/
 3. 旧 Python 网络和解析实现尚未删除。
 4. 多服 fixture、429/5xx/超时/token 轮换等完整 mock 覆盖仍需补齐。
 5. Authenticode 签名尚未配置。
+6. GitHub Dependabot 在提交 `34db97a` 报告 57 个依赖告警（14 high、27 moderate、16 low）；发布前需使用 `cargo audit`/`pip-audit` 分级处理。
 
 ---
 
