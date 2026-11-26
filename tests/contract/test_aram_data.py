@@ -229,6 +229,17 @@ class GeneratorTests(unittest.TestCase):
         self.assertEqual(champions["1"]["sdsh"], "105")
         self.assertEqual(champions["1"]["hdxn"], "90")
 
+    def test_parse_lua_module_handles_numeric_keys_and_arithmetic(self):
+        generator = self.load_generator()
+        script = ('return { ["X"] = { id = 1, title = "X", '
+                  'stats = { aram = { dmg_dealt = 0.95 } }, '
+                  'skills = {[1] = "A", [2] = "B"}, hp = 84+1000/17, '
+                  'delta = -0.05 } }')
+        module = generator.parse_lua_module(script)["X"]
+        self.assertEqual(module["skills"]["2"], "B")
+        self.assertAlmostEqual(module["hp"], 84 + 1000 / 17, places=9)
+        self.assertAlmostEqual(module["delta"], -0.05, places=9)
+
     def test_auto_source_falls_back_to_bootstrap(self):
         generator = self.load_generator()
         bootstrap = {

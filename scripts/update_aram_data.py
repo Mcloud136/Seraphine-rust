@@ -76,12 +76,12 @@ class Lexer:
         if self.index >= self.length:
             return ("eof", None)
         char = self.text[self.index]
-        if char in "{}[]=,;":
+        if char in "{}[]=,;" or char in "+-*/":
             self.index += 1
             return (char, char)
         if char in "\"'":
             return ("string", self._string(char))
-        if char == "-" or char.isdigit():
+        if char.isdigit():
             return ("number", self._number())
         if char.isalpha() or char == "_":
             start = self.index
@@ -113,12 +113,18 @@ class Lexer:
 
     def _number(self):
         start = self.index
-        if self.text[self.index] == "-":
+        while self.index < self.length and self.text[self.index].isdigit():
             self.index += 1
-        while self.index < self.length and (
-            self.text[self.index].isdigit() or self.text[self.index] in ".eE+-"
-        ):
+        if self.index < self.length and self.text[self.index] == ".":
             self.index += 1
+            while self.index < self.length and self.text[self.index].isdigit():
+                self.index += 1
+        if self.index < self.length and self.text[self.index] in "eE":
+            self.index += 1
+            if self.index < self.length and self.text[self.index] in "+-":
+                self.index += 1
+            while self.index < self.length and self.text[self.index].isdigit():
+                self.index += 1
         token = self.text[start:self.index]
         try:
             return float(token)
@@ -153,9 +159,11 @@ class Parser:
         kind, value = self.token
         if kind == "{":
             return self._table()
-        if kind in ("string", "number"):
+        if kind == "string":
             self._advance()
             return value
+        if kind in ("number", "+", "-"):
+            return self._expression()
         if kind == "ident":
             self._advance()
             if value == "true":
@@ -167,6 +175,36 @@ class Parser:
             raise LuaError("unexpected identifier %r" % value)
         raise LuaError("unexpected token %r" % (self.token,))
 
+    def _expression(self):
+        value = self._term()
+        while self.token[0] in ("+", "-"):
+            operator = self.token[0]
+            self._advance()
+            operand = self._term()
+            value = value + operand if operator == "+" else value - operand
+        return value
+
+    def _term(self):
+        value = self._factor()
+        while self.token[0] in ("*", "/"):
+            operator = self.token[0]
+            self._advance()
+            operand = self._factor()
+            value = value * operand if operator == "*" else value / operand
+        return value
+
+    def _factor(self):
+        if self.token[0] in ("+", "-"):
+            operator = self.token[0]
+            self._advance()
+            value = self._factor()
+            return -value if operator == "-" else value
+        if self.token[0] == "number":
+            value = self.token[1]
+            self._advance()
+            return value
+        raise LuaError("expected number, got %r" % (self.token,))
+
     def _table(self):
         self._expect("{")
         keyed = {}
@@ -176,7 +214,15 @@ class Parser:
                 raise LuaError("unterminated table")
             if self.token[0] == "[":
                 self._advance()
-                key = self._expect("string")
+                if self.token[0] == "string":
+                    key = self.token[1]
+                    self._advance()
+                elif self.token[0] in ("number", "+", "-"):
+                    value = self._expression()
+                    key = (str(int(value)) if float(value).is_integer()
+                           else str(value))
+                else:
+                    raise LuaError("expected table key, got %r" % (self.token,))
                 self._expect("]")
                 self._expect("=")
                 keyed[key] = self._value()
