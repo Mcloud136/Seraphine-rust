@@ -74,6 +74,16 @@ class SettingInterface(SeraphineInterface):
             cfg.enableReserveGameinfo
         )
 
+        self.aramDataAutoUpdateCard = SwitchSettingCard(
+            Icon.ARROWREPEAT, self.tr("Auto update ARAM data"),
+            self.tr(
+                "Download the latest ARAM balance data from the configured feed in the background"),
+            cfg.aramDataAutoUpdate)
+
+        self.aramDataUpdateCard = PushSettingCard(
+            self.tr("Update now"), Icon.UPDATE, self.tr("ARAM data"),
+            self.tr("Fetch the latest ARAM balance snapshot now"))
+
         self.opggGroup = SettingCardGroup(self.tr("OP.GG"),
                                           self.scrollWidget)
 
@@ -284,6 +294,8 @@ class SettingInterface(SeraphineInterface):
         self.functionGroup.addSettingCard(self.careerGamesCount)
         self.functionGroup.addSettingCard(self.gameInfoFilterCard)
         self.functionGroup.addSettingCard(self.autoClearGameinfoCard)
+        self.functionGroup.addSettingCard(self.aramDataAutoUpdateCard)
+        self.functionGroup.addSettingCard(self.aramDataUpdateCard)
         self.functionGroup.addSettingCard(self.gameInfoShowTierCard)
 
         self.opggGroup.addSettingCard(self.autoShowOpggCard)
@@ -341,12 +353,53 @@ class SettingInterface(SeraphineInterface):
         self.viewLogCard.clicked.connect(
             lambda: os.system(f'explorer {LOCAL_PATH}\\log')
         )
+        self.aramDataUpdateCard.clicked.connect(
+            self.__onAramDataUpdateClicked)
 
     def __onLolFolderCardClicked(self):
         current = cfg.get(cfg.lolFolder)
 
         msgBox = MultiPathSettingMsgBox(current, self.window())
         msgBox.exec_()
+
+    def __onAramDataUpdateClicked(self):
+        import asyncio
+        from app.backend import aram_data
+
+        async def run():
+            result = await aram_data.maybe_update(force=True)
+            if result.get("updated"):
+                try:
+                    from app.lol.aram import AramBuff
+                    AramBuff.data = result.get("data")
+                except Exception:
+                    pass
+                InfoBar.success(
+                    self.tr("ARAM data"),
+                    self.tr("Updated to version ") + str(result.get("version")),
+                    duration=3000, parent=self)
+            elif result.get("reason") == "up-to-date":
+                InfoBar.success(
+                    self.tr("ARAM data"), self.tr("Already up to date"),
+                    duration=3000, parent=self)
+            elif result.get("reason") == "not-configured":
+                InfoBar.warning(
+                    self.tr("ARAM data"),
+                    self.tr("No data feed is configured"),
+                    duration=5000, parent=self)
+            else:
+                detail = result.get("error") or result.get("reason") or ""
+                InfoBar.warning(
+                    self.tr("ARAM data"), str(detail),
+                    duration=5000, parent=self)
+
+        try:
+            asyncio.get_running_loop().create_task(run())
+        except RuntimeError:
+            InfoBar.error(
+                self.tr("ARAM data"),
+                self.tr("Event loop is not running"),
+                duration=5000, parent=self)
 
     def __showRestartToolTip(self):
         InfoBar.success(self.tr("Updated successfully"),

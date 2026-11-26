@@ -126,6 +126,7 @@ class ImagePoolTests(unittest.TestCase):
         label.clear()
         self.assertIsNone(label._asyncKey)
         self.assertTrue(label.pixmap() is None or label.pixmap().isNull())
+        self.assertTrue(self.wait_for(lambda: not label._imagePool._inflight))
 
         button = SummonerSpellButton()
         button.setPicture(pixmap)

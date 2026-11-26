@@ -85,7 +85,7 @@ fn champion_unavailable(session: &Value, champion_id: u64) -> bool {
 }
 
 fn validate_action(session: &Value, action_id: u64, data: &Value) -> Result<(), WriteGuardError> {
-    if phase(session) != "BAN_PICK" {
+    if !matches!(phase(session), "PLANNING" | "BAN_PICK" | "FINALIZATION") {
         return Err(WriteGuardError::InvalidPhase);
     }
     let local_cell = session
@@ -112,11 +112,15 @@ fn validate_action(session: &Value, action_id: u64, data: &Value) -> Result<(), 
     if action_type != requested_type {
         return Err(WriteGuardError::TypeMismatch);
     }
+    if action_type == "ban" && phase(session) != "BAN_PICK" {
+        return Err(WriteGuardError::InvalidPhase);
+    }
     let champion_id = number(data, "championId").ok_or(WriteGuardError::InvalidChampion)?;
     if champion_id == 0 || champion_unavailable(session, champion_id) {
         return Err(WriteGuardError::ChampionUnavailable);
     }
-    if data.get("completed").and_then(Value::as_bool) == Some(true)
+    if requested_type == "pick"
+        && data.get("completed").and_then(Value::as_bool) == Some(true)
         && number(action, "championId") != Some(champion_id)
     {
         return Err(WriteGuardError::TypeMismatch);
@@ -144,7 +148,7 @@ fn validate_trade(session: &Value, collection: &str, trade_id: u64) -> Result<()
 }
 
 fn validate_selection(session: &Value) -> Result<(), WriteGuardError> {
-    if !matches!(phase(session), "BAN_PICK" | "FINALIZATION") {
+    if !matches!(phase(session), "PLANNING" | "BAN_PICK" | "FINALIZATION") {
         return Err(WriteGuardError::InvalidPhase);
     }
     let local_cell = session
@@ -319,6 +323,64 @@ mod tests {
             Some(&json!({"type": "pick", "championId": 1}))
         )
         .is_ok());
+    }
+
+    #[test]
+    fn ban_only_writes_during_ban_pick() {
+        let mut data = session();
+        data["timer"]["phase"] = json!("PLANNING");
+        data["actions"] = json!([[{"id": 0, "actorCellId": 0, "type": "ban", "isInProgress": true, "completed": false, "championId": 0}]]);
+        assert_eq!(
+            validate_write(
+                &data,
+                "/lol-champ-select/v1/session/actions/0",
+                Some(&json!({"type": "ban", "championId": 1}))
+            ),
+            Err(WriteGuardError::InvalidPhase)
+        );
+        data["timer"]["phase"] = json!("BAN_PICK");
+        assert!(validate_write(
+            &data,
+            "/lol-champ-select/v1/session/actions/0",
+            Some(&json!({"type": "ban", "championId": 1}))
+        )
+        .is_ok());
+        assert!(validate_write(
+            &data,
+            "/lol-champ-select/v1/session/actions/0",
+            Some(&json!({"type": "ban", "championId": 1, "completed": true}))
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn pick_completion_requires_remembered_champion() {
+        let mut data = session();
+        data["actions"][0][0]["championId"] = json!(3);
+        assert_eq!(
+            validate_write(
+                &data,
+                "/lol-champ-select/v1/session/actions/10",
+                Some(&json!({"type": "pick", "championId": 1, "completed": true}))
+            ),
+            Err(WriteGuardError::TypeMismatch)
+        );
+        data["actions"][0][0]["championId"] = json!(1);
+        assert!(validate_write(
+            &data,
+            "/lol-champ-select/v1/session/actions/10",
+            Some(&json!({"type": "pick", "championId": 1, "completed": true}))
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn accepts_selection_during_planning() {
+        let mut data = session();
+        data["timer"]["phase"] = json!("PLANNING");
+        assert!(
+            validate_write(&data, "/lol-champ-select/v1/session/my-selection", None).is_ok()
+        );
     }
 
     #[test]

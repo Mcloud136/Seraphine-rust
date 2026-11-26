@@ -1,6 +1,9 @@
+import asyncio
 import unittest
+from collections import deque
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app.backend.compat import SidecarConnector
 from app.lol.match_history import extract_match_history_games
@@ -43,6 +46,50 @@ class SidecarCompatTests(unittest.IsolatedAsyncioTestCase):
     def test_connector_exposes_legacy_call_stack(self):
         connector = SidecarConnector()
         self.assertEqual(list(connector.callStack), [])
+
+    async def test_call_retries_five_times_and_emits_exception(self):
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector.client = FakeClient()
+        connector.client.call = AsyncMock(side_effect=RuntimeError("boom"))
+        connector.callStack = deque(maxlen=10)
+        with patch("app.backend.compat.signalBus") as signals:
+            with self.assertRaises(RuntimeError):
+                await connector.call("health")
+        self.assertEqual(connector.client.call.await_count, 5)
+        signals.lcuApiExceptionRaised.emit.assert_called_once()
+        self.assertEqual(connector.callStack[-1].op, "health")
+
+    async def test_call_returns_after_transient_failure(self):
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector.client = FakeClient()
+        connector.client.call = AsyncMock(
+            side_effect=[RuntimeError("temporary"), {"ok": True}]
+        )
+        connector.callStack = deque(maxlen=10)
+        self.assertEqual(await connector.call("health"), {"ok": True})
+        self.assertEqual(connector.client.call.await_count, 2)
+
+    async def test_summoner_not_found_is_not_retried(self):
+        from app.lol.exceptions import SummonerNotFound
+
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector.client = FakeClient()
+        connector.client.call = AsyncMock(side_effect=SummonerNotFound())
+        connector.callStack = deque(maxlen=10)
+        with self.assertRaises(SummonerNotFound):
+            await connector.call("getSummonerByName")
+        self.assertEqual(connector.client.call.await_count, 1)
+
+    async def test_start_failure_becomes_retry_maximum_attempts(self):
+        from app.lol.exceptions import RetryMaximumAttempts
+
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector._start_once = AsyncMock(side_effect=RuntimeError("not ready"))
+        connector.callStack = deque(maxlen=10)
+        with patch("app.backend.compat.signalBus"):
+            with self.assertRaises(RetryMaximumAttempts):
+                await connector.start(123)
+        self.assertEqual(connector._start_once.await_count, 5)
 
     async def test_history_methods_return_legacy_lists(self):
         games = await self.connector.getSummonerGamesByPuuid("puuid")
@@ -111,6 +158,67 @@ class SidecarCompatTests(unittest.IsolatedAsyncioTestCase):
             {"championId": 2, "type": "ban", "completed": True},
         )
 
+    async def test_forward_events_ignores_stale_epochs(self):
+        class EventClient:
+            epoch = 2
+
+            async def events_stream(self):
+                yield {"epoch": 1, "topic": "gameflow.changed", "data": "Lobby"}
+                yield {"epoch": 2, "topic": "gameflow.changed", "data": "InProgress"}
+
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector.client = EventClient()
+        emitted = []
+        signals = SimpleNamespace(
+            gameStatusChanged=SimpleNamespace(emit=emitted.append),
+            champSelectChanged=SimpleNamespace(emit=lambda value: None),
+            currentSummonerProfileChanged=SimpleNamespace(emit=lambda value: None),
+        )
+        with patch("app.backend.compat.signalBus", signals):
+            await connector._forward_events()
+        self.assertEqual(emitted, ["InProgress"])
+
+    async def test_restart_cancels_previous_event_consumer(self):
+        class RestartClient:
+            epoch = 1
+
+            async def start(self):
+                pass
+
+            async def lcu_connect(self, *args, **kwargs):
+                return {"epoch": self.epoch}
+
+            async def events_stream(self):
+                while True:
+                    await asyncio.sleep(1)
+                    yield {}
+
+            async def close(self, forget=False):
+                pass
+
+        connector = SidecarConnector.__new__(SidecarConnector)
+        connector.client = RestartClient()
+        connector.load_catalog = AsyncMock()
+        connector.forward_events = False
+        connector.event_task = None
+        connector.callStack = deque(maxlen=10)
+        with patch("app.backend.compat.ensure_cache_root", return_value=Path(".")):
+            await connector.start(1)
+            first = connector.event_task
+            await connector.start(2)
+        self.assertIsNot(connector.event_task, first)
+        self.assertTrue(first.cancelled() or first.done())
+        await connector.close()
+
+    async def test_write_paths_strip_trailing_slash(self):
+        await self.connector._write(
+            "POST", "/lol-challenges/v1/update-player-preferences/", {"challengeIds": []}
+        )
+        self.assertEqual(
+            self.connector.client.writes[0][1],
+            "/lol-challenges/v1/update-player-preferences",
+        )
+
     async def test_rune_page_management_uses_expected_endpoints(self):
         await self.connector.deleteCurrentRunePage()
         page = await self.connector.createRunePage("test", 8000)
@@ -122,6 +230,61 @@ class SidecarCompatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self.connector.client.writes[1][1], "/lol-perks/v1/pages"
         )
+
+
+class StartupOrderingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_opgg_initialization_waits_for_champion_aliases(self):
+        from app.view.main_window import MainWindow
+
+        alias_started = asyncio.Event()
+        release_alias = asyncio.Event()
+
+        async def refresh_aliases():
+            alias_started.set()
+            await release_alias.wait()
+
+        window = SimpleNamespace(
+            _MainWindow__startConnector=AsyncMock(return_value=True),
+            checkAndSwitchTo=Mock(),
+            careerInterface=object(),
+            isClientProcessRunning=False,
+            _MainWindow__changeCareerToCurrentSummoner=AsyncMock(),
+            _MainWindow__updateAvatarIconName=AsyncMock(),
+            startInterface=SimpleNamespace(hideLoadingPage=Mock()),
+            _MainWindow__setLolInstallFolder=Mock(),
+            auxiliaryFuncInterface=SimpleNamespace(
+                initChampionList=AsyncMock(),
+                lockConfigCard=SimpleNamespace(loadNowMode=Mock()),
+            ),
+            opggWindow=SimpleNamespace(
+                initWindow=AsyncMock(), setHomeInterfaceEnabled=Mock()
+            ),
+            _MainWindow__unlockInterface=Mock(),
+            _MainWindow__onGameStatusChanged=AsyncMock(),
+        )
+
+        with patch("app.view.main_window.opgg.start", new=AsyncMock()), patch(
+            "app.view.main_window.connector.getInstallFolder",
+            new=AsyncMock(return_value="C:/League"),
+        ), patch(
+            "app.view.main_window.connector.getGameStatus",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "app.view.main_window.AramBuff.checkAndUpdate", new=AsyncMock()
+        ), patch(
+            "app.view.main_window.ChampionAlias.checkAndUpdate",
+            new=refresh_aliases,
+        ):
+            startup = asyncio.ensure_future(
+                MainWindow._MainWindow__onLolClientStarted(window, 123)
+            )
+            await asyncio.wait_for(alias_started.wait(), timeout=1)
+            await asyncio.sleep(0)
+            window.opggWindow.initWindow.assert_not_called()
+            release_alias.set()
+            await asyncio.wait_for(startup, timeout=1)
+
+        window.opggWindow.initWindow.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -73,6 +73,7 @@ pub struct AutomationSnapshot {
     pub config_revision: u64,
 }
 
+#[derive(Clone)]
 pub struct DryRunAutomation {
     epoch: u64,
     session_id: String,

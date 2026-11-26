@@ -16,9 +16,11 @@ use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows_sys::Win32::System::ProcessStatus::{
     GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
 };
+use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, WaitForSingleObject, PROCESS_BASIC_INFORMATION,
     PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
@@ -63,6 +65,26 @@ fn process_name(entry: &PROCESSENTRY32W) -> String {
         .position(|value| *value == 0)
         .unwrap_or(entry.szExeFile.len());
     String::from_utf16_lossy(&entry.szExeFile[..length])
+}
+
+/// Returns the Windows build number, or `None` when ntdll cannot be queried.
+pub fn windows_build() -> Option<u32> {
+    type RtlGetVersion = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
+    let name: Vec<u16> = "ntdll.dll\0".encode_utf16().collect();
+    let module = unsafe { LoadLibraryW(name.as_ptr()) };
+    if module.is_null() {
+        return None;
+    }
+    let symbol = (unsafe { GetProcAddress(module, c"RtlGetVersion".as_ptr() as *const u8) })?;
+    let get_version: RtlGetVersion = unsafe { std::mem::transmute(symbol) };
+    let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+    info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    let status = unsafe { get_version(&mut info) };
+    if status == 0 {
+        Some(info.dwBuildNumber)
+    } else {
+        None
+    }
 }
 
 pub fn list_processes() -> Result<Vec<ProcessInfo>, PlatformError> {

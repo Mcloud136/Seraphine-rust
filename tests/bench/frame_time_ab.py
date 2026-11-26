@@ -5,6 +5,7 @@ import csv
 import json
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -43,6 +44,83 @@ def summarize_frames(frames):
     }
 
 
+def aggregate_rounds(rounds):
+    if not rounds:
+        return {"rounds": 0}
+    frames = [item["frames"] for item in rounds]
+
+    def median(key):
+        return round(statistics.median(item[key] for item in frames), 3)
+
+    stalls_per_minute = []
+    for item in rounds:
+        duration = float(item.get("sidecar", {}).get("durationSeconds") or 0)
+        if duration > 0:
+            stalls_per_minute.append(
+                item["frames"].get("stallsOver50Ms", 0) * 60.0 / duration
+            )
+    return {
+        "rounds": len(rounds),
+        "frameTimeP50Ms": median("frameTimeP50Ms"),
+        "frameTimeP95Ms": median("frameTimeP95Ms"),
+        "frameTimeP99Ms": median("frameTimeP99Ms"),
+        "frameTimeP99WorstMs": round(
+            max(item["frameTimeP99Ms"] for item in frames), 3
+        ),
+        "stallsOver50MsPerMinute": round(statistics.median(stalls_per_minute), 3)
+        if stalls_per_minute
+        else 0,
+        "sidecarCpuAvgPercent": round(
+            statistics.median(item["sidecar"]["cpuAvgPercent"] for item in rounds), 3
+        ),
+        "sidecarLatencyP99Ms": round(
+            statistics.median(item["sidecar"]["latencyP99Ms"] for item in rounds), 3
+        ),
+        "workingSetAvgMB": round(
+            statistics.median(item["sidecar"]["workingSetAvgMB"] for item in rounds), 2
+        ),
+    }
+
+
+def compare_regression(
+    current,
+    baseline,
+    max_p99_regression_percent=5.0,
+    max_stall_increase_per_minute=2.0,
+):
+    reasons = []
+    base_p99 = float(baseline.get("frameTimeP99Ms") or 0)
+    current_p99 = float(current.get("frameTimeP99Ms") or 0)
+    if base_p99 <= 0 or current_p99 <= 0:
+        reasons.append("baseline or current P99 is missing")
+        p99_regression = None
+    else:
+        p99_regression = round((current_p99 / base_p99 - 1.0) * 100.0, 3)
+        if p99_regression > max_p99_regression_percent:
+            reasons.append(
+                "P99 regression %.3f%% exceeds %.3f%%"
+                % (p99_regression, max_p99_regression_percent)
+            )
+    base_stalls = float(baseline.get("stallsOver50MsPerMinute") or 0)
+    current_stalls = float(current.get("stallsOver50MsPerMinute") or 0)
+    stall_increase = round(current_stalls - base_stalls, 3)
+    if stall_increase > max_stall_increase_per_minute:
+        reasons.append(
+            "stall increase %.3f/min exceeds %.3f/min"
+            % (stall_increase, max_stall_increase_per_minute)
+        )
+    return {
+        "passed": not reasons,
+        "p99RegressionPercent": p99_regression,
+        "stallIncreasePerMinute": stall_increase,
+        "thresholds": {
+            "maxP99RegressionPercent": max_p99_regression_percent,
+            "maxStallIncreasePerMinute": max_stall_increase_per_minute,
+        },
+        "reasons": reasons,
+    }
+
+
 def _nearest(sorted_values, value):
     index = bisect.bisect_left(sorted_values, value)
     candidates = []
@@ -55,7 +133,6 @@ def _nearest(sorted_values, value):
 
 def correlate_stalls(frames, samples, request_samples, threshold_ms=50.0):
     sample_times = [sample["qpcTimeMs"] for sample in samples]
-    request_times = [sample["qpcTimeMs"] for sample in request_samples]
     cpu_values = []
     request_latencies = []
     for frame in frames:
@@ -82,8 +159,14 @@ def correlate_stalls(frames, samples, request_samples, threshold_ms=50.0):
     }
 
 
-async def capture(args):
-    output_dir = Path(args.output_dir)
+async def capture(args, round_index=1):
+    if args.warmup > 0:
+        print(
+            "round %d: warmup %.1f seconds" % (round_index, args.warmup),
+            file=sys.stderr,
+        )
+        await asyncio.sleep(args.warmup)
+    output_dir = Path(args.output_dir) / ("round-%d" % round_index)
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "presentmon.csv"
     json_path = output_dir / "summary.json"
@@ -138,7 +221,7 @@ async def capture(args):
                 % (
                     presentmon.returncode,
                     stderr.decode("utf-8", errors="replace")
-                    or stdout.decode("utf-8", errors="replace"),
+                    or stdout.decode("utf-8", errors="replace")
                 )
             )
     finally:
@@ -158,6 +241,7 @@ async def capture(args):
     if not frames:
         raise RuntimeError("PresentMon produced no usable frame rows")
     result = {
+        "round": round_index,
         "presentMonCsv": str(csv_path),
         "processName": args.process_name,
         "frames": summarize_frames(frames),
@@ -172,12 +256,17 @@ async def capture(args):
     return result
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--presentmon", required=True)
     parser.add_argument("--process-name", default="League of Legends.exe")
-    parser.add_argument("--duration", type=float, default=60)
+    parser.add_argument("--duration", type=float, default=300)
+    parser.add_argument("--warmup", type=float, default=60)
+    parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--rate", type=float, default=20)
+    parser.add_argument("--baseline", help="previous aggregate or single-round JSON")
+    parser.add_argument("--max-p99-regression-percent", type=float, default=5.0)
+    parser.add_argument("--max-stall-increase-per-minute", type=float, default=2.0)
     parser.add_argument(
         "--sidecar",
         default=str(
@@ -189,9 +278,32 @@ def main():
         ),
     )
     parser.add_argument("--output-dir", default="benchmark-output")
-    args = parser.parse_args()
-    print(json.dumps(asyncio.run(capture(args)), indent=2))
+    args = parser.parse_args(argv)
+    if args.rounds < 1:
+        parser.error("--rounds must be at least 1")
+    rounds = [
+        asyncio.run(capture(args, index)) for index in range(1, args.rounds + 1)
+    ]
+    report = {"rounds": rounds, "aggregate": aggregate_rounds(rounds)}
+    if args.baseline:
+        baseline_report = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+        baseline = baseline_report.get("aggregate", baseline_report)
+        report["regression"] = compare_regression(
+            report["aggregate"],
+            baseline,
+            args.max_p99_regression_percent,
+            args.max_stall_increase_per_minute,
+        )
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "summary.json").write_text(
+        json.dumps(report, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(report, indent=2))
+    if report.get("regression", {}).get("passed") is False:
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -7,3 +7,7 @@ license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }

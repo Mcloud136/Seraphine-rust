@@ -27,6 +27,22 @@ READ_OPERATIONS = {
     "getReadyCheckStatus",
 }
 
+# Dynamic fields that legitimately differ between two reads of the same live
+# game (for example, a TFT match still in progress).
+VOLATILE_FIELDS = frozenset({"time_eliminated"})
+
+
+def normalize_for_comparison(value, volatile_fields=VOLATILE_FIELDS):
+    if isinstance(value, dict):
+        return {
+            key: normalize_for_comparison(item, volatile_fields)
+            for key, item in value.items()
+            if key not in volatile_fields
+        }
+    if isinstance(value, list):
+        return [normalize_for_comparison(item, volatile_fields) for item in value]
+    return value
+
 
 class ShadowConnector:
     def __init__(self, primary):
@@ -68,7 +84,7 @@ class ShadowConnector:
     async def _compare(self, name, shadow_method, args, kwargs, primary_result):
         try:
             shadow_result = await shadow_method(*args, **kwargs)
-            if shadow_result != primary_result:
+            if normalize_for_comparison(shadow_result) != normalize_for_comparison(primary_result):
                 self._record_mismatch(name, shadow_result, primary_result)
         except asyncio.CancelledError:
             raise

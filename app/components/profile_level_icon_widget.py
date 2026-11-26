@@ -219,7 +219,7 @@ class AramFlyoutView(FlyoutViewBase):
         self.tenacityValueLabel = ColorLabel(parent=self)  # 韧性的权重
 
         self.descriptionLabel = QLabel(parent=self)  # 额外调整
-        self.powerByLabel = QLabel(self.tr("Powered by: jddld.com"))
+        self.powerByLabel = QLabel(self.tr("Data: League of Legends Wiki"))
 
         self.updateInfo(info)
 

@@ -124,34 +124,53 @@ impl CatalogBuilder {
                 .champs
                 .get(&champion_id.to_string())
                 .and_then(Value::as_str)
+                .map(str::to_string)
             else {
                 continue;
             };
-            let entry = self
-                .champion_skins
-                .entry(champion_name.to_string())
-                .or_insert_with(|| json!({ "id": champion_id, "skins": {} }));
-            if let Some(skin_map) = entry.get_mut("skins").and_then(Value::as_object_mut) {
-                if let Some(name) = skin.get("name").and_then(Value::as_str) {
-                    skin_map.insert(
-                        name.to_string(),
-                        json!({
-                            "skinId": id,
-                            "splashPath": skin.get("splashPath").cloned().unwrap_or(Value::Null),
-                            "uncenteredSplashPath": skin.get("uncenteredSplashPath").cloned().unwrap_or(Value::Null),
-                        }),
-                    );
-                }
-            }
-            if let Some(content_id) = skin
-                .get("skinAugments")
-                .and_then(|value| value.get("augments"))
+            if let Some(tiers) = skin
+                .get("questSkinInfo")
+                .and_then(|value| value.get("tiers"))
                 .and_then(Value::as_array)
-                .and_then(|augments| augments.first())
-                .and_then(|augment| augment.get("contentId"))
             {
-                insert_map(&mut self.skin_augments, id, content_id.clone());
+                for tier in tiers {
+                    self.insert_skin(champion_id, &champion_name, tier);
+                }
+            } else {
+                self.insert_skin(champion_id, &champion_name, skin);
             }
+        }
+    }
+
+    fn insert_skin(&mut self, champion_id: i64, champion_name: &str, skin: &Value) {
+        let Some(id) = skin.get("id") else {
+            return;
+        };
+        let Some(name) = skin.get("name").and_then(Value::as_str) else {
+            return;
+        };
+        let entry = self
+            .champion_skins
+            .entry(champion_name.to_string())
+            .or_insert_with(|| json!({ "id": champion_id, "skins": {} }));
+        if let Some(skin_map) = entry.get_mut("skins").and_then(Value::as_object_mut) {
+            skin_map.insert(
+                name.to_string(),
+                json!({
+                    "skinId": id,
+                    "splashPath": skin.get("splashPath").cloned().unwrap_or(Value::Null),
+                    "uncenteredSplashPath": skin.get("uncenteredSplashPath").cloned().unwrap_or(Value::Null),
+                }),
+            );
+        }
+        if let Some(content_id) = skin
+            .get("skinAugments")
+            .and_then(|value| value.get("augments"))
+            .and_then(Value::as_array)
+            .and_then(|augments| augments.first())
+            .and_then(|augment| augment.get("contentId"))
+        {
+            insert_map(&mut self.skin_augments, id, content_id.clone());
         }
     }
 
@@ -225,5 +244,38 @@ mod tests {
         assert_eq!(snapshot["items"]["1"]["iconPath"], "/item.png");
         assert_eq!(snapshot["champs"]["1"], "Annie");
         assert_eq!(snapshot["queues"]["420"]["name"], "Ranked");
+    }
+
+    #[test]
+    fn quest_skin_tiers_are_flattened_with_augments() {
+        let snapshot = build_snapshot(
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([{ "id": 1, "name": "Annie", "alias": "Annie" }]),
+            json!({
+                "1000": {
+                    "id": 1000,
+                    "name": "Quest Annie",
+                    "questSkinInfo": {
+                        "tiers": [{
+                            "id": 1001,
+                            "name": "Prestige Annie",
+                            "splashPath": "/prestige.jpg",
+                            "uncenteredSplashPath": "/prestige-uncentered.jpg",
+                            "skinAugments": { "augments": [{ "contentId": "augment-1" }] }
+                        }]
+                    }
+                }
+            }),
+            json!({ "styles": [] }),
+            json!([]),
+        );
+        let skins = &snapshot["championSkins"]["Annie"]["skins"];
+        assert_eq!(skins["Prestige Annie"]["skinId"], 1001);
+        assert_eq!(skins["Prestige Annie"]["splashPath"], "/prestige.jpg");
+        assert!(skins.get("Quest Annie").is_none());
+        assert_eq!(snapshot["skinAugments"]["1001"], "augment-1");
     }
 }

@@ -5,11 +5,28 @@ from pathlib import Path
 from urllib.parse import quote
 
 from app.common.signals import signalBus
+from app.lol.exceptions import RetryMaximumAttempts, SummonerNotFound
 from app.lol.match_history import extract_match_history_games
 
 from .cache_paths import ensure_cache_root
 from .catalog import CatalogManager
 from .sidecar_client import SidecarClient
+
+
+class SidecarCallRecord:
+    def __init__(self, op, args=None):
+        self.op = op
+        self.argKeys = tuple(sorted((args or {}).keys()))
+        self.response = None
+
+    def __str__(self):
+        if isinstance(self.response, BaseException):
+            response = type(self.response).__name__
+        else:
+            response = "ok" if self.response is not None else "pending"
+        return "SidecarRequest(op=%r, argKeys=%r, response=%s)" % (
+            self.op, self.argKeys, response
+        )
 
 
 class SidecarConnector:
@@ -31,7 +48,46 @@ class SidecarConnector:
     def lcuSess(self):
         return None
 
+    async def _run_with_retry(self, op, args, operation, wrap_final=False):
+        record = SidecarCallRecord(op, args)
+        self.callStack.append(record)
+        last_error = None
+        for _ in range(5):
+            try:
+                result = await operation()
+            except asyncio.CancelledError:
+                raise
+            except SummonerNotFound as error:
+                record.response = error
+                raise
+            except BaseException as error:
+                last_error = error
+                await asyncio.sleep(0)
+                continue
+            record.response = "ok"
+            return result
+
+        final_error = last_error or RetryMaximumAttempts(
+            "Exceeded maximum retry attempts."
+        )
+        record.response = final_error
+        if type(final_error) is not ReferenceError:
+            signalBus.lcuApiExceptionRaised.emit(op, final_error)
+        if wrap_final and not isinstance(final_error, RetryMaximumAttempts):
+            wrapped = RetryMaximumAttempts("Exceeded maximum retry attempts.")
+            raise wrapped from final_error
+        raise final_error
+
     async def start(self, pid):
+        return await self._run_with_retry(
+            "start", {"pid": pid}, lambda: self._start_once(pid), wrap_final=True
+        )
+
+    async def _start_once(self, pid):
+        if self.event_task is not None:
+            self.event_task.cancel()
+            await asyncio.gather(self.event_task, return_exceptions=True)
+            self.event_task = None
         self.pid = pid
         await self.client.start()
         proxy = None
@@ -70,6 +126,8 @@ class SidecarConnector:
 
     async def _forward_events(self):
         async for event in self.client.events_stream():
+            if event.get("epoch") != self.client.epoch:
+                continue
             topic = event.get("topic")
             data = event.get("data")
             if topic == "gameflow.changed":
@@ -341,6 +399,7 @@ class SidecarConnector:
         )
 
     async def _write(self, method, path, data=None, operation_id=None):
+        path = path.rstrip("/") or "/"
         return await self.client.lcu_write(
             method, path, data=data, operation_id=operation_id
         )
@@ -644,7 +703,9 @@ class SidecarConnector:
         }
 
     async def call(self, op, args=None, timeout=15.0):
-        return await self.client.call(op, args, timeout)
+        return await self._run_with_retry(
+            op, args, lambda: self.client.call(op, args, timeout)
+        )
 
     async def load_catalog(self):
         import json

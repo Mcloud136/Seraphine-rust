@@ -254,13 +254,23 @@ class SidecarClient:
         pending = self.pending.pop(request_id, None)
         if pending is None:
             return None
-        future, size = pending
+        future, size, expected_epoch = pending
         self._inflight_bytes = max(0, self._inflight_bytes - size)
-        return future
+        return future, expected_epoch
 
     async def call(self, op, args=None, timeout=15.0):
         await self.start()
         return await asyncio.wait_for(self._call(op, args, timeout), timeout=timeout)
+
+    async def _cancel_request(self, request_id):
+        try:
+            await asyncio.wait_for(
+                self._send(protocol.cancel(request_id)), timeout=0.5
+            )
+        except (asyncio.CancelledError, Exception):
+            self.closed = True
+            self._fail_pending(protocol.ProtocolError("failed to cancel sidecar request"))
+            self._schedule_close()
 
     async def _call(self, op, args=None, timeout=15.0):
         async with self._pending_slots:
@@ -282,13 +292,13 @@ class SidecarClient:
                 raise protocol.ProtocolError("request is too large")
             if self._inflight_bytes + request_size > protocol.MAX_IPC_INFLIGHT_BYTES:
                 raise protocol.ProtocolError("IPC in-flight byte budget exceeded")
-            self.pending[request_id] = (future, request_size)
+            self.pending[request_id] = (future, request_size, request_message["epoch"])
             self._inflight_bytes += request_size
             try:
                 await self._send(request_message)
                 return await future
-            except asyncio.TimeoutError:
-                await self._send(protocol.cancel(request_id))
+            except asyncio.CancelledError:
+                await asyncio.shield(self._cancel_request(request_id))
                 raise
             finally:
                 self._take_pending(request_id)
@@ -458,22 +468,30 @@ class SidecarClient:
 
         self._close_task = asyncio.create_task(close_when_ready())
 
+    def _resolve_response(self, request_id, message):
+        pending = self._take_pending(request_id)
+        if pending is None:
+            return
+        future, expected_epoch = pending
+        if future.done():
+            return
+        if message.get("epoch") != expected_epoch:
+            future.set_exception(protocol.RpcError(
+                "InvalidParams", "stale response epoch", retryable=True
+            ))
+            return
+        if message.get("error") is not None:
+            future.set_exception(protocol.RpcError.from_dict(message["error"]))
+        else:
+            future.set_result(message.get("data"))
+
     async def _reader_loop(self):
         try:
             while True:
                 message = await self._read_message()
                 kind = message.get("type")
                 if kind == protocol.RESPONSE:
-                    request_id = message.get("id")
-                    future = self._take_pending(request_id)
-                    if future is None or future.done():
-                        continue
-                    if message.get("error") is not None:
-                        future.set_exception(
-                            protocol.RpcError.from_dict(message["error"])
-                        )
-                    else:
-                        future.set_result(message.get("data"))
+                    self._resolve_response(message.get("id"), message)
                 elif kind == protocol.EVENT:
                     event_size = self._message_size(message)
                     if (
@@ -531,7 +549,7 @@ class SidecarClient:
     def _fail_pending(self, error):
         while self.pending:
             _, pending = self.pending.popitem()
-            future, _ = pending
+            future, _, _ = pending
             if not future.done():
                 future.set_exception(error)
         self._inflight_bytes = 0

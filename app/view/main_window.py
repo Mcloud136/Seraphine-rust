@@ -525,7 +525,6 @@ class MainWindow(FluentWindow):
         aramInitT = asyncio.create_task(AramBuff.checkAndUpdate())
         championsInit = asyncio.create_task(ChampionAlias.checkAndUpdate())
 
-        asyncio.create_task(self.opggWindow.initWindow())
         self.opggWindow.setHomeInterfaceEnabled(False)
 
         # ---- 240413 ---- By Hpero4
@@ -556,6 +555,7 @@ class MainWindow(FluentWindow):
 
         self.__unlockInterface()
         await asyncio.gather(championsInit, aramInitT)
+        asyncio.create_task(self.opggWindow.initWindow())
         await self.__onGameStatusChanged(status)
 
         # Note 如果你希望测试大乱斗的数据弹框, 参考这个 -- By Hpero4

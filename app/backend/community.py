@@ -26,11 +26,6 @@ async def refresh_champion_aliases(client):
     return result if result.get("available") else None
 
 
-async def refresh_aram_buffs(client):
-    result = await client.aram_buff_refresh(get_game_version())
-    return result if result.get("available") else None
-
-
 def load_champion_aliases():
     from app.common.config import LOCAL_PATH
 

@@ -1,0 +1,24 @@
+[package]
+name = "seraphine-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "stream"] }
+seraphine-automation = { path = "../automation" }
+seraphine-domain = { path = "../domain" }
+seraphine-lcu = { path = "../lcu" }
+seraphine-platform = { path = "../platform" }
+seraphine-resource-scheduler = { path = "../resource_scheduler" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+urlencoding = "2"
+zeroize = "1"

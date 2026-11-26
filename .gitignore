@@ -58,6 +58,10 @@ seraphine
 /rust/target/
 /rust/target-*/
 
+# Node 与 Rust 构建产物
+node_modules/
+target/
+
 # WinUI 3 spike build output
 /spike/winui3-rust/target/
 
@@ -87,3 +91,9 @@ seraphine
 # Python test caches
 __pycache__/
 *.py[cod]
+
+# Tauri app
+/rust/app/node_modules/
+/rust/app/src-tauri/target/
+/rust/app/src-tauri/gen/
+/rust/app/screenshot.png

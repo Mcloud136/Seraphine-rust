@@ -1,9 +1,7 @@
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
 
 pub const CHAMPION_ALIAS_URL: &str =
     "https://game.gtimg.cn/images/lol/act/img/js/heroList/hero_list.js";
-pub const ARAM_URL: &str = "http://www.jddld.com/index.php";
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -81,51 +79,6 @@ pub fn search_champion_aliases(data: &Value, query: &str) -> Result<Vec<u64>, St
     Ok(matches)
 }
 
-pub fn parse_aram_buffs(raw: &Value) -> Result<Value, String> {
-    if raw.get("code").and_then(Value::as_i64) != Some(1) {
-        return Err("ARAM source rejected the request".to_string());
-    }
-    let data = raw
-        .get("data")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "ARAM data is missing".to_string())?;
-    let version = data
-        .get("banben")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "ARAM version is missing".to_string())?;
-    let mut champions = BTreeMap::new();
-    for item in data.values() {
-        let Some(id) = item
-            .get("heroid")
-            .and_then(Value::as_u64)
-            .or_else(|| text(item, "heroid").parse().ok())
-        else {
-            continue;
-        };
-        let required = [
-            "catname",
-            "zcsh",
-            "sdsh",
-            "zlxl",
-            "hdxn",
-            "jnjs",
-            "renxing",
-            "description",
-        ];
-        if required
-            .iter()
-            .any(|key| !item.get(*key).is_some_and(|v| !v.is_null()))
-        {
-            continue;
-        }
-        champions.insert(id.to_string(), item.clone());
-    }
-    if champions.is_empty() {
-        return Err("ARAM data is empty".to_string());
-    }
-    Ok(json!({ "version": version, "champions": champions }))
-}
-
 pub fn aram_info(data: &Value, champion_id: u64) -> Option<Value> {
     Some(data.get("champions")?.get(champion_id.to_string())?.clone())
 }
@@ -167,18 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn aram_parser_preserves_required_fields() {
-        let item = json!({
-            "heroid": "75",
-            "catname": "沙漠皇帝",
-            "zcsh": "10%", "sdsh": "10%", "zlxl": "1", "hdxn": "2",
-            "jnjs": "3", "renxing": "4", "description": "test"
+    fn aram_info_reads_bundled_snapshot() {
+        let data = json!({
+            "version": "16.23.1",
+            "champions": {"75": {"catname": "沙漠皇帝", "zcsh": "95"}},
         });
-        let data = parse_aram_buffs(&json!({
-            "code": 1, "data": {"banben": "16.24", "first": item}
-        }))
-        .unwrap();
-        assert_eq!(data["version"], "16.24");
         assert_eq!(aram_info(&data, 75).unwrap()["catname"], "沙漠皇帝");
         assert!(aram_info(&data, 1).is_none());
     }
@@ -186,7 +132,6 @@ mod tests {
     #[test]
     fn rejects_invalid_community_data() {
         assert!(parse_champion_aliases(&json!({})).is_err());
-        assert!(parse_aram_buffs(&json!({"code": 503})).is_err());
         assert!(validate_cached(&json!({"version": "1"}), "champions").is_err());
     }
 }

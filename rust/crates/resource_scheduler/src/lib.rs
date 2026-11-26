@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Notify;
 
 pub const MAX_ACTIVE_TASKS: usize = 32;
 pub const MAX_INFLIGHT_BYTES: usize = 2 * 1024 * 1024;
@@ -53,6 +54,7 @@ struct State {
     deferred_total: AtomicU64,
     rejected_total: AtomicU64,
     slots: Mutex<[usize; 5]>,
+    notify: Notify,
 }
 
 impl State {
@@ -65,6 +67,7 @@ impl State {
             deferred_total: AtomicU64::new(0),
             rejected_total: AtomicU64::new(0),
             slots: Mutex::new([0; 5]),
+            notify: Notify::new(),
         }
     }
 
@@ -179,6 +182,26 @@ impl ResourceScheduler {
         })
     }
 
+    /// Acquires a permit, waiting for byte capacity when the budget is temporarily full.
+    pub async fn acquire(
+        &self,
+        priority: Priority,
+        estimated_bytes: usize,
+    ) -> Result<ResourcePermit, ScheduleError> {
+        if estimated_bytes > MAX_INFLIGHT_BYTES {
+            return Err(ScheduleError::ByteBudget);
+        }
+
+        loop {
+            let notified = self.state.notify.notified();
+            match self.try_acquire(priority, estimated_bytes) {
+                Ok(permit) => return Ok(permit),
+                Err(ScheduleError::ByteBudget) => notified.await,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     pub fn snapshot(&self) -> SchedulerSnapshot {
         SchedulerSnapshot {
             game_state: self.game_state(),
@@ -213,6 +236,7 @@ impl Drop for ResourcePermit {
         self.state
             .active_bytes
             .fetch_sub(self.estimated_bytes as u64, Ordering::Relaxed);
+        self.state.notify.notify_one();
     }
 }
 
@@ -249,5 +273,24 @@ mod tests {
             scheduler.try_acquire(Priority::P2, MAX_INFLIGHT_BYTES + 1),
             Err(ScheduleError::ByteBudget)
         ));
+    }
+
+    #[tokio::test]
+    async fn acquire_waits_for_byte_budget_release() {
+        let scheduler = ResourceScheduler::new();
+        let blocker = scheduler
+            .try_acquire(Priority::P2, MAX_INFLIGHT_BYTES)
+            .unwrap();
+        let waiter = scheduler.clone();
+        let task = tokio::spawn(async move { waiter.acquire(Priority::P2, 1).await });
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+
+        drop(blocker);
+        let permit = tokio::time::timeout(std::time::Duration::from_millis(100), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(permit.is_ok());
     }
 }

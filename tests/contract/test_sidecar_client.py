@@ -1,3 +1,4 @@
+import asyncio
 import os
 import unittest
 from pathlib import Path
@@ -63,6 +64,79 @@ class SidecarClientTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RpcError) as raised:
                 await self.client.lcu_write("POST", "/lol-gameflow/v1/reconnect")
             self.assertEqual(raised.exception.code, "NotConnected")
+
+    async def test_timeout_sends_cancel_and_clears_pending(self):
+        client = SidecarClient()
+        sent = []
+
+        async def fake_send(message):
+            sent.append(message)
+
+        client._send = fake_send
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(client._call("echo", timeout=1), timeout=0.02)
+
+        self.assertTrue(any(message.get("type") == "cancel" for message in sent))
+        self.assertEqual(client.pending, {})
+        self.assertEqual(client._inflight_bytes, 0)
+
+    async def test_external_cancel_sends_cancel_and_clears_pending(self):
+        client = SidecarClient()
+        sent = []
+
+        async def fake_send(message):
+            sent.append(message)
+
+        client._send = fake_send
+        task = asyncio.create_task(client._call("echo", timeout=1))
+        await asyncio.sleep(0)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertTrue(any(message.get("type") == "cancel" for message in sent))
+        self.assertEqual(client.pending, {})
+        self.assertEqual(client._inflight_bytes, 0)
+
+    async def test_stale_response_epoch_is_rejected(self):
+        from app.backend.protocol import RpcError, response
+
+        client = SidecarClient()
+        future = asyncio.get_running_loop().create_future()
+        client.pending[7] = (future, 10, 1)
+        client._inflight_bytes = 10
+        client._resolve_response(7, response(7, 2, {"value": "new-client"}))
+
+        with self.assertRaises(RpcError) as raised:
+            await future
+        self.assertEqual(raised.exception.code, "InvalidParams")
+        self.assertIn("epoch", raised.exception.message)
+        self.assertEqual(client.pending, {})
+        self.assertEqual(client._inflight_bytes, 0)
+
+    async def test_matching_response_epoch_resolves_request(self):
+        from app.backend.protocol import response
+
+        client = SidecarClient()
+        future = asyncio.get_running_loop().create_future()
+        client.pending[7] = (future, 10, 1)
+        client._inflight_bytes = 10
+        client._resolve_response(7, response(7, 1, {"value": "same-client"}))
+
+        self.assertEqual(await future, {"value": "same-client"})
+        self.assertEqual(client.pending, {})
+        self.assertEqual(client._inflight_bytes, 0)
+
+    async def test_catalog_and_sgp_fail_fast_without_lcu(self):
+        from app.backend.protocol import RpcError
+
+        await self.client.start()
+        with self.assertRaises(RpcError) as catalog_error:
+            await self.client.lcu_catalog()
+        self.assertEqual(catalog_error.exception.code, "NotConnected")
+        with self.assertRaises(RpcError) as sgp_error:
+            await self.client.sgp_get("/test")
+        self.assertEqual(sgp_error.exception.code, "NotConnected")
 
     async def test_heartbeat_keeps_healthy_sidecar_alive(self):
         import asyncio

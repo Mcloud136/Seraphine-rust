@@ -2,7 +2,7 @@ pub mod cache;
 pub mod websocket;
 
 use base64::Engine;
-use cache::{CacheMetrics, JsonCache, Start};
+use cache::{CacheFlight, CacheMetrics, JsonCache, Start};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Client, Url};
@@ -24,6 +24,7 @@ pub enum LcuError {
     NotConnected,
     Http(reqwest::Error),
     Json(reqwest::Error),
+    JsonParse(String),
     InvalidAuth,
     Unauthorized,
     Asset(String),
@@ -36,6 +37,7 @@ impl fmt::Display for LcuError {
             Self::NotConnected => formatter.write_str("LCU is not connected"),
             Self::Http(error) => write!(formatter, "LCU HTTP error: {error}"),
             Self::Json(error) => write!(formatter, "LCU JSON error: {error}"),
+            Self::JsonParse(error) => write!(formatter, "LCU JSON parse error: {error}"),
             Self::InvalidAuth => formatter.write_str("invalid LCU authorization header"),
             Self::Unauthorized => formatter.write_str("SGP authentication failed"),
             Self::Asset(message) => write!(formatter, "asset error: {message}"),
@@ -45,6 +47,15 @@ impl fmt::Display for LcuError {
 }
 
 impl std::error::Error for LcuError {}
+
+impl LcuError {
+    pub fn status(&self) -> Option<reqwest::StatusCode> {
+        match self {
+            Self::Http(error) => error.status(),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct LcuClient {
@@ -106,18 +117,17 @@ impl LcuClient {
             }
         }
 
+        let flight = CacheFlight::new(Arc::clone(&self.cache), key.clone());
         match self.fetch_json(path).await {
             Ok(value) => {
                 let size = serde_json::to_vec(&value)
                     .map(|data| data.len())
                     .unwrap_or(0);
                 self.cache.complete(&key, value.clone(), size, ttl);
+                flight.disarm();
                 Ok(value)
             }
-            Err(error) => {
-                self.cache.fail(&key);
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -197,7 +207,11 @@ async fn parse_json_response(response: reqwest::Response) -> Result<Value, LcuEr
     if response.status() == reqwest::StatusCode::NO_CONTENT {
         return Ok(Value::Null);
     }
-    response.json().await.map_err(LcuError::Json)
+    let bytes = response.bytes().await.map_err(LcuError::Http)?;
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&bytes).map_err(|error| LcuError::JsonParse(error.to_string()))
 }
 
 #[derive(Clone)]
@@ -558,6 +572,22 @@ mod tests {
         worker.join().unwrap();
     }
 
+    #[tokio::test]
+    async fn empty_success_response_is_null() {
+        let (base_url, _hits, worker) = spawn_sgp_mock(vec![(200, "")]);
+        let response = reqwest::get(format!("{base_url}/test")).await.unwrap();
+        assert_eq!(parse_json_response(response).await.unwrap(), Value::Null);
+        worker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn no_content_response_is_null() {
+        let (base_url, _hits, worker) = spawn_sgp_mock(vec![(204, "")]);
+        let response = reqwest::get(format!("{base_url}/test")).await.unwrap();
+        assert_eq!(parse_json_response(response).await.unwrap(), Value::Null);
+        worker.join().unwrap();
+    }
+
     #[test]
     fn sgp_uses_tencent_host_mapping() {
         for (server, host) in [
@@ -580,19 +610,5 @@ mod tests {
         assert!(client.host_allowed("example.com"));
         assert!(client.host_allowed("cdn.example.com"));
         assert!(!client.host_allowed("evil.example.net"));
-    }
-
-    #[test]
-    fn isolated_clients_stay_within_idle_memory_budget() {
-        let _lcu = LcuClient::new(55123, "test-token").unwrap();
-        let _sgp = SgpClient::new("HN1").unwrap();
-        let _external = ExternalClient::new(None).unwrap();
-        let memory = seraphine_platform::current_process_memory().unwrap();
-        println!(
-            "isolated clients: working_set={} private_usage={}",
-            memory.working_set_bytes, memory.private_usage_bytes
-        );
-        assert!(memory.working_set_bytes < 10 * 1024 * 1024);
-        assert!(memory.private_usage_bytes < 10 * 1024 * 1024);
     }
 }

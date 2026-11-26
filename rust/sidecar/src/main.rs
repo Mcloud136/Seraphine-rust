@@ -7,14 +7,13 @@ use seraphine_automation::write_guard::{confirm_write, validate_write};
 use seraphine_automation::{AutomationState, DryRunAutomation};
 use seraphine_domain::catalog::CatalogBuilder;
 use seraphine_domain::community::{
-    aram_info, parse_aram_buffs, parse_champion_aliases, validate_cached, ARAM_URL,
-    CHAMPION_ALIAS_URL,
+    aram_info, parse_champion_aliases, validate_cached, CHAMPION_ALIAS_URL,
 };
 use seraphine_domain::opgg::{
     parse_arena_champion_build, parse_other_champion_build, parse_other_tier_list,
     parse_ranked_tier_list,
 };
-use seraphine_lcu::cache::{JsonCache, Start};
+use seraphine_lcu::cache::{CacheFlight, JsonCache, Start};
 use seraphine_lcu::websocket::{
     run_websocket, LcuEvent, WsStats, CHAMP_SELECT_TOPIC, ENTITLEMENT_TOPIC, GAMEFLOW_TOPIC,
     SUMMONER_TOPIC,
@@ -132,6 +131,7 @@ struct WriteLedgerKey {
     operation_id: String,
 }
 
+#[derive(Clone)]
 struct WriteLedgerEntry {
     request_hash: [u8; 32],
     state: AutomationState,
@@ -154,11 +154,13 @@ fn write_request_hash(method: &str, path: &str, data: Option<&Value>) -> [u8; 32
 
 const MAX_PERSISTED_WRITE_GUARDS: usize = 512;
 const MAX_WRITE_GUARD_BYTES: u64 = 256 * 1024;
+const WRITE_GUARD_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Copy)]
 struct PersistedWriteGuard {
     request_hash: [u8; 32],
     completed: bool,
+    completed_at_ms: u64,
 }
 
 fn hex_encode(bytes: &[u8; 32]) -> String {
@@ -244,6 +246,10 @@ fn load_write_guards(path: &Path) -> (HashMap<String, PersistedWriteGuard>, Opti
             Some("outcome_unknown") => false,
             _ => return (HashMap::new(), Some("persistent write guards are invalid")),
         };
+        let completed_at_ms = entry
+            .get("completedAt")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         if operation.len() != 64 || hex_decode(operation).is_none() {
             return (HashMap::new(), Some("persistent write guards are invalid"));
         }
@@ -256,6 +262,7 @@ fn load_write_guards(path: &Path) -> (HashMap<String, PersistedWriteGuard>, Opti
                 PersistedWriteGuard {
                     request_hash,
                     completed,
+                    completed_at_ms,
                 },
             )
             .is_some()
@@ -274,11 +281,20 @@ fn write_guard_payload(guards: &HashMap<String, PersistedWriteGuard>) -> Result<
                 "operation": operation,
                 "requestHash": hex_encode(&guard.request_hash),
                 "state": if guard.completed { "completed" } else { "outcome_unknown" },
+                "completedAt": guard.completed_at_ms,
             })
         })
         .collect::<Vec<_>>();
     serde_json::to_vec(&json!({"version": 1, "entries": entries}))
         .map_err(|_| RpcError::new("PersistenceError", "failed to serialize write guards"))
+}
+
+fn prune_expired_completed_guards(guards: &mut HashMap<String, PersistedWriteGuard>, now_ms: u64) {
+    guards.retain(|_, guard| {
+        !guard.completed
+            || guard.completed_at_ms == 0
+            || now_ms.saturating_sub(guard.completed_at_ms) < WRITE_GUARD_RETENTION_MS
+    });
 }
 
 fn save_write_guards(state: &mut State) -> Result<(), RpcError> {
@@ -305,6 +321,7 @@ fn save_write_guards(state: &mut State) -> Result<(), RpcError> {
             Some(_) => {}
         }
     }
+    prune_expired_completed_guards(&mut merged, unix_millis());
     if merged.len() > MAX_PERSISTED_WRITE_GUARDS {
         return Err(RpcError::new(
             "ResourceDeferred",
@@ -352,6 +369,7 @@ fn claim_write_guard(
         state.write_guards = merged;
         return Ok(WriteGuardClaim::Existing(completed));
     }
+    prune_expired_completed_guards(&mut merged, unix_millis());
     if merged.len() >= MAX_PERSISTED_WRITE_GUARDS {
         return Err(RpcError::new(
             "ResourceDeferred",
@@ -364,6 +382,7 @@ fn claim_write_guard(
         PersistedWriteGuard {
             request_hash,
             completed: false,
+            completed_at_ms: 0,
         },
     );
     let payload = write_guard_payload(&merged)?;
@@ -390,6 +409,7 @@ fn persist_write_guard(
         PersistedWriteGuard {
             request_hash,
             completed,
+            completed_at_ms: if completed { unix_millis() } else { 0 },
         },
     );
     if let Err(error) = save_write_guards(state) {
@@ -507,7 +527,7 @@ struct State {
     lcu: Option<LcuClient>,
     sgp: Option<SgpClient>,
     external: Option<ExternalClient>,
-    opgg_cache: JsonCache,
+    opgg_cache: Arc<JsonCache>,
     asset: Option<AssetClient>,
     asset_cache: Arc<AssetCache>,
     ws_task: Option<tokio::task::JoinHandle<()>>,
@@ -522,6 +542,7 @@ struct State {
     sgp_refresh_count: u64,
     cache_root: PathBuf,
     data_root: PathBuf,
+    catalog_root: PathBuf,
     champion_aliases: Option<ChampionAliasCache>,
     external_proxy: Option<String>,
     automation: Option<DryRunAutomation>,
@@ -530,14 +551,18 @@ struct State {
     write_guards: HashMap<String, PersistedWriteGuard>,
     write_guard_path: PathBuf,
     write_guard_error: Option<&'static str>,
-    catalog_champs: HashMap<String, String>,
-    catalog_augments: HashMap<String, String>,
-    catalog_paths: HashMap<String, String>,
+    catalog_champs: Arc<HashMap<String, String>>,
+    catalog_augments: Arc<HashMap<String, String>>,
+    catalog_paths: Arc<HashMap<String, String>>,
 }
 
 impl State {
     fn new() -> Self {
         let data_root = env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join("Seraphine");
+        let catalog_root = env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
             .join("Seraphine");
@@ -556,7 +581,7 @@ impl State {
             lcu: None,
             sgp: None,
             external: None,
-            opgg_cache: JsonCache::default(),
+            opgg_cache: Arc::new(JsonCache::default()),
             asset: None,
             asset_cache: Arc::new(AssetCache::default()),
             ws_task: None,
@@ -576,6 +601,7 @@ impl State {
                 .join("Cache")
                 .join("game"),
             data_root,
+            catalog_root,
             champion_aliases: None,
             external_proxy: None,
             automation: None,
@@ -584,9 +610,9 @@ impl State {
             write_guards,
             write_guard_path,
             write_guard_error,
-            catalog_champs: HashMap::new(),
-            catalog_augments: HashMap::new(),
-            catalog_paths: HashMap::new(),
+            catalog_champs: Arc::new(HashMap::new()),
+            catalog_augments: Arc::new(HashMap::new()),
+            catalog_paths: Arc::new(HashMap::new()),
         }
     }
 
@@ -595,7 +621,7 @@ impl State {
     }
 
     fn restore_catalog_indexes(&mut self) {
-        let path = self.data_root.join("catalog.json");
+        let path = self.catalog_root.join("catalog.json");
         let Ok(length) = fs::metadata(&path).map(|metadata| metadata.len()) else {
             return;
         };
@@ -614,33 +640,37 @@ impl State {
     }
 
     fn index_catalog(&mut self, snapshot: &Value) {
-        self.catalog_champs = snapshot
-            .get("champs")
-            .and_then(Value::as_object)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|(id, name)| {
-                        name.as_str().map(|name| (id.clone(), name.to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.catalog_augments = snapshot
-            .get("cherryAugments")
-            .and_then(Value::as_object)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|(id, item)| {
-                        item.get("nameTRA")
-                            .and_then(Value::as_str)
-                            .map(|name| (id.clone(), name.to_string()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.catalog_paths.clear();
+        self.catalog_champs = Arc::new(
+            snapshot
+                .get("champs")
+                .and_then(Value::as_object)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|(id, name)| {
+                            name.as_str().map(|name| (id.clone(), name.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
+        self.catalog_augments = Arc::new(
+            snapshot
+                .get("cherryAugments")
+                .and_then(Value::as_object)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|(id, item)| {
+                            item.get("nameTRA")
+                                .and_then(Value::as_str)
+                                .map(|name| (id.clone(), name.to_string()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        );
+        let mut paths = HashMap::new();
         for (kind, key, path_key) in [
             ("item", "items", "iconPath"),
             ("spell", "summonerSpells", "iconPath"),
@@ -650,12 +680,249 @@ impl State {
             if let Some(items) = snapshot.get(key).and_then(Value::as_object) {
                 for (id, item) in items {
                     if let Some(path) = item.get(path_key).and_then(Value::as_str) {
-                        self.catalog_paths
-                            .insert(format!("{kind}:{id}"), path.to_string());
+                        paths.insert(format!("{kind}:{id}"), path.to_string());
                     }
                 }
             }
         }
+        self.catalog_paths = Arc::new(paths);
+    }
+}
+
+#[derive(Clone)]
+struct NetworkSnapshot {
+    shared: Arc<Mutex<State>>,
+    epoch: u64,
+    connection: Option<ConnectionInfo>,
+    scheduler: ResourceScheduler,
+    lcu: Option<LcuClient>,
+    sgp: Option<SgpClient>,
+    sgp_token: Option<Zeroizing<String>>,
+    sgp_refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    external: Option<ExternalClient>,
+    asset: Option<AssetClient>,
+    asset_cache: Arc<AssetCache>,
+    opgg_cache: Arc<JsonCache>,
+    cache_root: PathBuf,
+    data_root: PathBuf,
+    catalog_root: PathBuf,
+    champion_aliases: Option<ChampionAliasCache>,
+    catalog_champs: Arc<HashMap<String, String>>,
+    catalog_augments: Arc<HashMap<String, String>>,
+    catalog_paths: Arc<HashMap<String, String>>,
+}
+
+impl State {
+    fn network_snapshot(&self, shared: Arc<Mutex<State>>) -> NetworkSnapshot {
+        NetworkSnapshot {
+            shared,
+            epoch: self.epoch,
+            connection: self.connection.clone(),
+            scheduler: self.scheduler.clone(),
+            lcu: self.lcu.clone(),
+            sgp: self.sgp.clone(),
+            sgp_token: self.sgp_token.clone(),
+            sgp_refresh_lock: Arc::clone(&self.sgp_refresh_lock),
+            external: self.external.clone(),
+            asset: self.asset.clone(),
+            asset_cache: Arc::clone(&self.asset_cache),
+            opgg_cache: Arc::clone(&self.opgg_cache),
+            cache_root: self.cache_root.clone(),
+            data_root: self.data_root.clone(),
+            catalog_root: self.catalog_root.clone(),
+            champion_aliases: self.champion_aliases.clone(),
+            catalog_champs: Arc::clone(&self.catalog_champs),
+            catalog_augments: Arc::clone(&self.catalog_augments),
+            catalog_paths: Arc::clone(&self.catalog_paths),
+        }
+    }
+}
+
+impl NetworkSnapshot {
+    async fn external_client(&self) -> Result<ExternalClient, RpcError> {
+        if let Some(client) = &self.external {
+            return Ok(client.clone());
+        }
+        let mut state = self.shared.lock().await;
+        if state.external.is_none() {
+            state.external = Some(
+                ExternalClient::new(state.external_proxy.as_deref())
+                    .map_err(|error| RpcError::new("ConnectionError", error.to_string()))?,
+            );
+        }
+        Ok(state.external.clone().unwrap())
+    }
+
+    async fn asset_client(&self) -> Result<AssetClient, RpcError> {
+        if let Some(client) = &self.asset {
+            return Ok(client.clone());
+        }
+        let mut state = self.shared.lock().await;
+        if state.asset.is_none() {
+            state.asset = Some(
+                AssetClient::new(
+                    state.external_proxy.as_deref(),
+                    vec![
+                        "raw.communitydragon.org".to_string(),
+                        "lol-api-champion.op.gg".to_string(),
+                        "game.gtimg.cn".to_string(),
+                    ],
+                )
+                .map_err(|error| RpcError::new("AssetError", error.to_string()))?,
+            );
+        }
+        Ok(state.asset.clone().unwrap())
+    }
+
+    async fn sgp_client(&self) -> Result<SgpClient, RpcError> {
+        if self.shared.lock().await.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        if let Some(client) = &self.sgp {
+            return Ok(client.clone());
+        }
+        let connection = self
+            .connection
+            .clone()
+            .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+        let mut state = self.shared.lock().await;
+        if state.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        if state.sgp.is_none() {
+            state.sgp = Some(
+                SgpClient::new(&connection.server)
+                    .map_err(|error| RpcError::new("ConnectionError", error.to_string()))?,
+            );
+        }
+        Ok(state.sgp.clone().unwrap())
+    }
+
+    async fn refresh_sgp_token(
+        &self,
+        previous_token: &Zeroizing<String>,
+    ) -> Result<Zeroizing<String>, RpcError> {
+        let _refresh_guard = self.sgp_refresh_lock.lock().await;
+        {
+            let state = self.shared.lock().await;
+            if state.epoch != self.epoch {
+                return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+            }
+            if state.sgp_token.as_ref() != Some(previous_token) {
+                return state
+                    .sgp_token
+                    .clone()
+                    .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"));
+            }
+        }
+        let client = self
+            .lcu
+            .clone()
+            .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+        let data = client
+            .get_json_fresh("/entitlements/v1/token")
+            .await
+            .map_err(|error| RpcError::new("LcuError", error.to_string()))?;
+        let token = parse_sgp_token(&data)
+            .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"))?;
+        if token == previous_token.as_str() {
+            return Err(RpcError::new(
+                "SgpError",
+                "SGP token did not change after refresh",
+            ));
+        }
+        let mut state = self.shared.lock().await;
+        if state.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        if state.sgp_token.as_ref() == Some(previous_token) {
+            state.sgp_token_superseded = Some(previous_token.clone());
+            state.sgp_token = Some(Zeroizing::new(token.clone()));
+            state.sgp_refresh_count = state.sgp_refresh_count.saturating_add(1);
+        }
+        state
+            .sgp_token
+            .clone()
+            .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"))
+    }
+
+    async fn sgp_get(&self, path: &str, params: Option<Value>) -> Result<Value, RpcError> {
+        if self.shared.lock().await.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        let mut current_token = self
+            .sgp_token
+            .clone()
+            .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"))?;
+        let sgp = self.sgp_client().await?;
+        let _permit = self
+            .scheduler
+            .try_acquire(Priority::P2, 128 * 1024)
+            .map_err(|error| {
+                RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true)
+            })?;
+        let mut retried = false;
+        let mut refreshed = false;
+        let result = loop {
+            match sgp
+                .get_json_once(path, current_token.as_str(), params.as_ref())
+                .await
+            {
+                Ok(data) => break Ok(data),
+                Err(LcuError::Unauthorized) if !refreshed => {
+                    current_token = self.refresh_sgp_token(&current_token).await?;
+                    refreshed = true;
+                }
+                Err(error) if !retried && should_retry_sgp(&error) => {
+                    retried = true;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                Err(error) => break Err(sgp_rpc_error(error)),
+            }
+        }?;
+        if self.shared.lock().await.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        Ok(result)
+    }
+}
+
+struct WriteSnapshot {
+    shared: Arc<Mutex<State>>,
+    epoch: u64,
+    working: State,
+}
+
+impl WriteSnapshot {
+    fn new(shared: Arc<Mutex<State>>, state: &State) -> Self {
+        let mut working = State::new();
+        working.epoch = state.epoch;
+        working.connection = state.connection.clone();
+        working.lcu = state.lcu.clone();
+        working.scheduler = state.scheduler.clone();
+        working.automation = state.automation.clone();
+        working.write_ledger = state.write_ledger.clone();
+        working.write_request_hashes = state.write_request_hashes.clone();
+        working.write_guards = state.write_guards.clone();
+        working.write_guard_path = state.write_guard_path.clone();
+        working.write_guard_error = state.write_guard_error;
+        Self {
+            shared,
+            epoch: state.epoch,
+            working,
+        }
+    }
+
+    async fn commit(self) -> Result<(), RpcError> {
+        let mut state = self.shared.lock().await;
+        if state.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        state.write_ledger = self.working.write_ledger;
+        state.write_request_hashes = self.working.write_request_hashes;
+        state.write_guards = self.working.write_guards;
+        state.write_guard_error = self.working.write_guard_error;
+        Ok(())
     }
 }
 
@@ -804,14 +1071,6 @@ fn safe_cache_path(root: &Path, folder: &str, name: &str) -> Result<PathBuf, Rpc
         }
     }
     Ok(root.join(folder).join(name))
-}
-
-fn community_filename(kind: &str) -> Option<&'static str> {
-    match kind {
-        "champion_alias" => Some("ChampionAlias.json"),
-        "aram_buff" => Some("AramBuff.json"),
-        _ => None,
-    }
 }
 
 fn load_community_cache(path: &Path, champions_key: &str) -> Option<Value> {
@@ -1201,335 +1460,6 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 }
             }
         }
-        "lcu.write" => {
-            if env::var_os("SERAPHINE_ENABLE_LCU_WRITES").as_deref()
-                != Some(std::ffi::OsStr::new("1"))
-            {
-                Err(RpcError::new("WriteDisabled", "LCU writes are disabled"))
-            } else if message.epoch != Some(state.epoch) {
-                Err(RpcError::new("InvalidParams", "stale connection epoch"))
-            } else {
-                let args = message.args.clone().unwrap_or(Value::Null);
-                let method = args
-                    .get("method")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_ascii_uppercase();
-                let path = args.get("path").and_then(Value::as_str).unwrap_or_default();
-                let operation_id = args
-                    .get("operationId")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let data = args.get("data").cloned();
-                let lowercase_path = path.to_ascii_lowercase();
-                if !matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
-                    || !path.starts_with('/')
-                    || path.len() <= 1
-                    || path == "/lol-champ-select/v1/session"
-                    || path.ends_with('/')
-                    || path.contains("://")
-                    || path.contains('?')
-                    || path.contains('#')
-                    || path.split('/').any(|segment| matches!(segment, "." | ".."))
-                    || lowercase_path.contains("%2e")
-                    || lowercase_path.contains("%2f")
-                    || lowercase_path.contains("%5c")
-                    || path.contains('\r')
-                    || path.contains('\n')
-                    || path.len() > 2048
-                    || operation_id.is_empty()
-                    || operation_id.len() > 128
-                {
-                    Err(RpcError::new(
-                        "InvalidParams",
-                        "invalid LCU write parameters",
-                    ))
-                } else if let Some(body) = data.as_ref() {
-                    if serde_json::to_vec(body)
-                        .map(|bytes| bytes.len() > 256 * 1024)
-                        .unwrap_or(true)
-                    {
-                        Err(RpcError::new(
-                            "InvalidParams",
-                            "LCU write body is too large",
-                        ))
-                    } else {
-                        write_lcu(state, epoch, &method, path, operation_id, data).await
-                    }
-                } else {
-                    write_lcu(state, epoch, &method, path, operation_id, None).await
-                }
-            }
-        }
-        "lcu.catalog" => {
-            let Some(client) = state.lcu.clone() else {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("NotConnected", "LCU is not connected"),
-                );
-            };
-            let endpoints = [
-                "/lol-game-data/assets/v1/items.json",
-                "/lol-game-data/assets/v1/summoner-spells.json",
-                "/lol-game-data/assets/v1/perks.json",
-                "/lol-game-queues/v1/queues",
-                "/lol-game-data/assets/v1/champion-summary.json",
-                "/lol-game-data/assets/v1/skins.json",
-                "/lol-game-data/assets/v1/perkstyles.json",
-                "/lol-game-data/assets/v1/cherry-augments.json",
-            ];
-            let mut builder = CatalogBuilder::default();
-            let priority = if message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("force"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                Priority::P1
-            } else {
-                Priority::P4
-            };
-            for (index, endpoint) in endpoints.into_iter().enumerate() {
-                let permit = match state.scheduler.try_acquire(priority, 512 * 1024) {
-                    Ok(permit) => permit,
-                    Err(error) => {
-                        state.metrics.errors += 1;
-                        return Message::response_error(
-                            id,
-                            epoch,
-                            RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true),
-                        );
-                    }
-                };
-                match client.get_json(endpoint).await {
-                    Ok(value) => {
-                        drop(permit);
-                        match index {
-                            0 => builder.add_items(value),
-                            1 => builder.add_spells(value),
-                            2 => builder.add_runes(value),
-                            3 => builder.add_queues(value),
-                            4 => builder.add_champions(value),
-                            5 => builder.add_skins(value),
-                            6 => builder.add_perks(value),
-                            7 => builder.add_augments(value),
-                            _ => unreachable!(),
-                        }
-                    }
-                    Err(error) => {
-                        drop(permit);
-                        state.metrics.errors += 1;
-                        return Message::response_error(
-                            id,
-                            epoch,
-                            RpcError::new("LcuError", format!("{endpoint}: {error}"))
-                                .retryable(true),
-                        );
-                    }
-                }
-            }
-            let snapshot = builder.build();
-            state.index_catalog(&snapshot);
-            let payload = match serde_json::to_vec(&snapshot) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("SerializeError", error.to_string()),
-                    );
-                }
-            };
-            let base = env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(env::temp_dir)
-                .join("Seraphine");
-            if let Err(error) = fs::create_dir_all(&base) {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("IoError", error.to_string()),
-                );
-            }
-            let path = base.join("catalog.json");
-            if let Err(error) = write_file_atomic(&path, &payload) {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("IoError", error.to_string()),
-                );
-            }
-            Ok(json!({
-                "path": path,
-                "bytes": payload.len(),
-                "epoch": state.epoch,
-            }))
-        }
-        "sgp.get" => {
-            let Some(path) = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("path"))
-                .and_then(Value::as_str)
-            else {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("InvalidParams", "path is required"),
-                );
-            };
-            if !path.starts_with('/') || path.contains("://") {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("InvalidParams", "only SGP paths are allowed"),
-                );
-            }
-            let Some(connection) = state.connection.clone() else {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("NotConnected", "LCU is not connected"),
-                );
-            };
-            let Some(token) = state.sgp_token.clone() else {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("NotConnected", "SGP token is unavailable"),
-                );
-            };
-            if state.sgp.is_none() {
-                match SgpClient::new(&connection.server) {
-                    Ok(client) => state.sgp = Some(client),
-                    Err(error) => {
-                        state.metrics.errors += 1;
-                        return Message::response_error(
-                            id,
-                            epoch,
-                            RpcError::new("ConnectionError", error.to_string()),
-                        );
-                    }
-                }
-            }
-            let permit = match state.scheduler.try_acquire(Priority::P2, 128 * 1024) {
-                Ok(permit) => permit,
-                Err(error) => {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true),
-                    );
-                }
-            };
-            let params = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("params"))
-                .cloned();
-            let sgp = state.sgp.as_ref().unwrap().clone();
-            let mut current_token = token;
-            let mut retried = false;
-            let mut refreshed = false;
-            let result = loop {
-                match sgp
-                    .get_json_once(path, current_token.as_str(), params.as_ref())
-                    .await
-                {
-                    Ok(data) => break Ok(data),
-                    Err(LcuError::Unauthorized) if !refreshed => {
-                        if let Err(error) = refresh_sgp_token(state, &current_token).await {
-                            break Err(error);
-                        }
-                        current_token = state
-                            .sgp_token
-                            .clone()
-                            .expect("SGP token missing after refresh");
-                        refreshed = true;
-                    }
-                    Err(error) if !retried && should_retry_sgp(&error) => {
-                        retried = true;
-                        tokio::time::sleep(Duration::from_millis(250)).await;
-                    }
-                    Err(error) => break Err(sgp_rpc_error(error)),
-                }
-            };
-            drop(permit);
-            result
-        }
-        "asset.get" => {
-            let args = message.args.clone().unwrap_or(Value::Null);
-            let folder = args
-                .get("folder")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let name = args.get("name").and_then(Value::as_str).unwrap_or_default();
-            let destination = match safe_cache_path(&state.cache_root, folder, name) {
-                Ok(path) => path,
-                Err(error) => {
-                    state.metrics.errors += 1;
-                    return Message::response_error(id, epoch, error);
-                }
-            };
-            let max_bytes = match usize::try_from(
-                args.get("maxBytes")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(2 * 1024 * 1024),
-            ) {
-                Ok(max_bytes) if max_bytes > 0 => max_bytes,
-                _ => {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("InvalidParams", "invalid asset byte budget"),
-                    );
-                }
-            };
-            let source = if let Some(path) = args.get("path").and_then(Value::as_str) {
-                if !path.starts_with('/') || path.contains("://") {
-                    state.metrics.errors += 1;
-                    return Message::response_error(
-                        id,
-                        epoch,
-                        RpcError::new("InvalidParams", "only LCU asset paths are allowed"),
-                    );
-                }
-                AssetSource::Lcu(path.to_string())
-            } else if let Some(url) = args.get("url").and_then(Value::as_str) {
-                AssetSource::External(url.to_string())
-            } else {
-                state.metrics.errors += 1;
-                return Message::response_error(
-                    id,
-                    epoch,
-                    RpcError::new("InvalidParams", "path or url is required"),
-                );
-            };
-            let priority = if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
-                Priority::P2
-            } else {
-                Priority::P3
-            };
-            match state
-                .cached_asset(destination, source, max_bytes, priority)
-                .await
-            {
-                Ok(path) => Ok(json!({ "path": path })),
-                Err(error) => Err(error),
-            }
-        }
         "external.get" => {
             let Some(url) = message
                 .args
@@ -1677,144 +1607,22 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
                 "snapshot": automation.snapshot(),
             }))
         }
-        "opgg.positions" => {
-            let (region, mode, tier, _) = match opgg_params(message) {
-                Ok(params) => params,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let champion_id = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("championId"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let url =
-                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
-            let raw = match state.fetch_opgg(url).await {
-                Ok(raw) => raw,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let positions = raw
-                .get("data")
-                .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-                .iter()
-                .find(|item| item.get("id").and_then(Value::as_u64) == Some(champion_id))
-                .map(|item| {
-                    item.get("positions")
-                        .and_then(Value::as_array)
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .filter_map(|position| position.get("name").and_then(Value::as_str))
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            Ok(json!(positions))
-        }
-        "opgg.tier_list" => {
-            let (region, mode, tier, _) = match opgg_params(message) {
-                Ok(params) => params,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let url =
-                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
-            let raw = match state.fetch_opgg(url).await {
-                Ok(raw) => raw,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let data = if mode == "ranked" {
-                parse_ranked_tier_list(&raw)
-            } else {
-                parse_other_tier_list(&raw)
-            };
-            Ok(json!({
-                "data": data,
-                "version": raw.get("meta").and_then(|meta| meta.get("version")).cloned().unwrap_or(Value::Null),
-            }))
-        }
-        "opgg.champion_build" => {
-            let (region, mode, tier, mut position) = match opgg_params(message) {
-                Ok(params) => params,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let champion_id = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("championId"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let tier_url =
-                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
-            let tier_raw = match state.fetch_opgg(tier_url).await {
-                Ok(raw) => raw,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let positions = tier_raw
-                .get("data")
-                .and_then(Value::as_array)
-                .unwrap_or(&Vec::new())
-                .iter()
-                .find(|item| item.get("id").and_then(Value::as_u64) == Some(champion_id))
-                .map(|item| {
-                    item.get("positions")
-                        .and_then(Value::as_array)
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .filter_map(|position| position.get("name").and_then(Value::as_str))
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            if !positions.contains(&position)
-                && !positions.is_empty()
-                && matches!(mode.as_str(), "ranked" | "classic")
-            {
-                position = positions[0].clone();
+        "aram_buff.refresh" => {
+            let data = load_community_cache(&state.data_root.join("AramBuff.json"), "champions");
+            match data {
+                Some(data) => Ok(json!({
+                    "available": true,
+                    "updated": false,
+                    "data": data,
+                    "warning": Value::Null
+                })),
+                None => Ok(json!({
+                    "available": false,
+                    "updated": false,
+                    "data": Value::Null,
+                    "warning": "ARAM data is not installed; run the data update"
+                })),
             }
-            let url = if mode == "arena" {
-                format!(
-                    "https://lol-api-champion.op.gg/api/{region}/champions/{mode}/{champion_id}?tier={tier}"
-                )
-            } else {
-                format!(
-                    "https://lol-api-champion.op.gg/api/{region}/champions/{mode}/{champion_id}/{position}?tier={tier}"
-                )
-            };
-            let raw = match state.fetch_opgg(url).await {
-                Ok(raw) => raw,
-                Err(error) => return Message::response_error(id, epoch, error),
-            };
-            let mut data = if mode == "arena" {
-                parse_arena_champion_build(&raw)
-            } else {
-                parse_other_champion_build(&raw, &position)
-            };
-            state.resolve_opgg_icons(&mut data).await;
-            Ok(json!({
-                "data": data,
-                "version": raw.get("meta").and_then(|meta| meta.get("version")).cloned().unwrap_or(Value::Null),
-                "mode": mode,
-            }))
-        }
-        "champion_alias.refresh" | "aram_buff.refresh" => {
-            let kind = if op == "champion_alias.refresh" {
-                "champion_alias"
-            } else {
-                "aram_buff"
-            };
-            let force = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("force"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let game_version = message
-                .args
-                .as_ref()
-                .and_then(|args| args.get("gameVersion"))
-                .and_then(Value::as_str);
-            state.refresh_community(kind, force, game_version).await
         }
         "champion_alias.search" => {
             if state.champion_aliases.is_none() {
@@ -1947,6 +1755,323 @@ async fn handle_request(message: &Message, state: &mut State) -> Message {
     }
 }
 
+fn is_snapshot_network_op(op: &str) -> bool {
+    matches!(
+        op,
+        "asset.get"
+            | "opgg.positions"
+            | "opgg.tier_list"
+            | "opgg.champion_build"
+            | "lcu.catalog"
+            | "champion_alias.refresh"
+            | "sgp.get"
+    )
+}
+
+async fn handle_snapshot_network_request(message: &Message, shared: Arc<Mutex<State>>) -> Message {
+    let id = message.id.unwrap_or(0);
+    let (epoch, mut snapshot) = {
+        let mut state = shared.lock().await;
+        state.metrics.requests += 1;
+        let epoch = message.epoch.unwrap_or(state.epoch);
+        (epoch, state.network_snapshot(shared.clone()))
+    };
+    let result: Result<Value, RpcError> = async {
+        match message.op.as_deref().unwrap_or_default() {
+        "asset.get" => {
+            let args = message.args.clone().unwrap_or(Value::Null);
+            let folder = args
+                .get("folder")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let name = args.get("name").and_then(Value::as_str).unwrap_or_default();
+            let destination = safe_cache_path(&snapshot.cache_root, folder, name)?;
+            let max_bytes = usize::try_from(
+                args.get("maxBytes")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(2 * 1024 * 1024),
+            )
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| RpcError::new("InvalidParams", "invalid asset byte budget"))?;
+            let source = if let Some(path) = args.get("path").and_then(Value::as_str) {
+                if !path.starts_with('/') || path.contains("://") {
+                    Err(RpcError::new(
+                        "InvalidParams",
+                        "only LCU asset paths are allowed",
+                    ))
+                } else {
+                    Ok(AssetSource::Lcu(path.to_string()))
+                }
+            } else if let Some(url) = args.get("url").and_then(Value::as_str) {
+                Ok(AssetSource::External(url.to_string()))
+            } else {
+                Err(RpcError::new("InvalidParams", "path or url is required"))
+            };
+            let source = source?;
+            let priority = if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                Priority::P2
+            } else {
+                Priority::P3
+            };
+            let path = snapshot
+                .cached_asset(destination, source, max_bytes, priority)
+                .await?;
+            Ok(json!({ "path": path }))
+        }
+        "opgg.positions" => {
+            let (region, mode, tier, _) = opgg_params(message)?;
+            let champion_id = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("championId"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let url =
+                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
+            let raw = snapshot.fetch_opgg(url).await?;
+            let positions = raw
+                .get("data")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+                .iter()
+                .find(|item| item.get("id").and_then(Value::as_u64) == Some(champion_id))
+                .map(|item| {
+                    item.get("positions")
+                        .and_then(Value::as_array)
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|position| position.get("name").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(json!(positions))
+        }
+        "opgg.tier_list" => {
+            let (region, mode, tier, _) = opgg_params(message)?;
+            let url =
+                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
+            let raw = snapshot.fetch_opgg(url).await?;
+            let data = if mode == "ranked" {
+                parse_ranked_tier_list(&raw)
+            } else {
+                parse_other_tier_list(&raw)
+            };
+            Ok(json!({
+                "data": data,
+                "version": raw.get("meta").and_then(|meta| meta.get("version")).cloned().unwrap_or(Value::Null),
+            }))
+        }
+        "opgg.champion_build" => {
+            let (region, mode, tier, mut position) = opgg_params(message)?;
+            let champion_id = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("championId"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let tier_url =
+                format!("https://lol-api-champion.op.gg/api/{region}/champions/{mode}?tier={tier}");
+            let tier_raw = snapshot.fetch_opgg(tier_url).await?;
+            let positions = tier_raw
+                .get("data")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+                .iter()
+                .find(|item| item.get("id").and_then(Value::as_u64) == Some(champion_id))
+                .map(|item| {
+                    item.get("positions")
+                        .and_then(Value::as_array)
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|position| position.get("name").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !positions.contains(&position)
+                && !positions.is_empty()
+                && matches!(mode.as_str(), "ranked" | "classic")
+            {
+                position = positions[0].clone();
+            }
+            let url = if mode == "arena" {
+                format!(
+                    "https://lol-api-champion.op.gg/api/{region}/champions/{mode}/{champion_id}?tier={tier}"
+                )
+            } else {
+                format!(
+                    "https://lol-api-champion.op.gg/api/{region}/champions/{mode}/{champion_id}/{position}?tier={tier}"
+                )
+            };
+            let raw = snapshot.fetch_opgg(url).await?;
+            let mut data = if mode == "arena" {
+                parse_arena_champion_build(&raw)
+            } else {
+                parse_other_champion_build(&raw, &position)
+            };
+            snapshot.resolve_opgg_icons(&mut data).await;
+            Ok(json!({
+                "data": data,
+                "version": raw.get("meta").and_then(|meta| meta.get("version")).cloned().unwrap_or(Value::Null),
+                "mode": mode,
+            }))
+        }
+        "lcu.catalog" => {
+            let force = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("force"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            snapshot.build_catalog(force).await
+        }
+        "champion_alias.refresh" => {
+            let force = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("force"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let game_version = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("gameVersion"))
+                .and_then(Value::as_str);
+            snapshot.refresh_champion_alias(force, game_version).await
+        }
+        "sgp.get" => {
+            let path = message
+                .args
+                .as_ref()
+                .and_then(|args| args.get("path"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| RpcError::new("InvalidParams", "path is required"))?;
+            if !path.starts_with('/') || path.contains("://") {
+                Err(RpcError::new("InvalidParams", "only SGP paths are allowed"))
+            } else {
+                let params = message
+                    .args
+                    .as_ref()
+                    .and_then(|args| args.get("params"))
+                    .cloned();
+                snapshot.sgp_get(path, params).await
+            }
+        }
+        _ => Err(RpcError::new(
+            "MethodNotFound",
+            format!(
+                "unknown operation: {}",
+                message.op.as_deref().unwrap_or_default()
+            ),
+        )),
+        }
+    }
+    .await;
+    if result.is_err() {
+        shared.lock().await.metrics.errors += 1;
+    }
+    match result {
+        Ok(data) => Message::response(id, epoch, data),
+        Err(error) => Message::response_error(id, epoch, error),
+    }
+}
+
+async fn handle_write_request(message: &Message, shared: Arc<Mutex<State>>) -> Message {
+    let id = message.id.unwrap_or(0);
+    let epoch = message.epoch.unwrap_or(0);
+    shared.lock().await.metrics.requests += 1;
+    let result: Result<Value, RpcError> = async {
+        if env::var_os("SERAPHINE_ENABLE_LCU_WRITES").as_deref() != Some(std::ffi::OsStr::new("1"))
+        {
+            return Err(RpcError::new("WriteDisabled", "LCU writes are disabled"));
+        }
+        let current_epoch = shared.lock().await.epoch;
+        if message.epoch != Some(current_epoch) {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        let args = message.args.clone().unwrap_or(Value::Null);
+        let method = args
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        let path = args.get("path").and_then(Value::as_str).unwrap_or_default();
+        let operation_id = args
+            .get("operationId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let data = args.get("data").cloned();
+        let lowercase_path = path.to_ascii_lowercase();
+        if !matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE")
+            || !path.starts_with('/')
+            || path.len() <= 1
+            || path == "/lol-champ-select/v1/session"
+            || path.ends_with('/')
+            || path.contains("://")
+            || path.contains('?')
+            || path.contains('#')
+            || path.split('/').any(|segment| matches!(segment, "." | ".."))
+            || lowercase_path.contains("%2e")
+            || lowercase_path.contains("%2f")
+            || lowercase_path.contains("%5c")
+            || path.contains('\r')
+            || path.contains('\n')
+            || path.len() > 2048
+            || operation_id.is_empty()
+            || operation_id.len() > 128
+        {
+            return Err(RpcError::new(
+                "InvalidParams",
+                "invalid LCU write parameters",
+            ));
+        }
+        if let Some(body) = data.as_ref() {
+            if serde_json::to_vec(body)
+                .map(|bytes| bytes.len() > 256 * 1024)
+                .unwrap_or(true)
+            {
+                return Err(RpcError::new(
+                    "InvalidParams",
+                    "LCU write body is too large",
+                ));
+            }
+        }
+        let mut snapshot = {
+            let state = shared.lock().await;
+            WriteSnapshot::new(shared.clone(), &state)
+        };
+        let result = write_lcu(
+            &mut snapshot.working,
+            current_epoch,
+            &method,
+            path,
+            operation_id,
+            data,
+        )
+        .await;
+        if let Err(error) = snapshot.commit().await {
+            return Err(RpcError::new(
+                "OutcomeUnknown",
+                format!(
+                    "connection changed while write was in flight: {}",
+                    error.message
+                ),
+            ));
+        }
+        result
+    }
+    .await;
+    if result.is_err() {
+        shared.lock().await.metrics.errors += 1;
+    }
+    match result {
+        Ok(data) => Message::response(id, epoch, data),
+        Err(error) => Message::response_error(id, epoch, error),
+    }
+}
+
 fn is_concurrent_read_op(op: &str) -> bool {
     matches!(
         op,
@@ -2069,10 +2194,13 @@ async fn handle_concurrent_read_request(message: &Message, shared: &Arc<Mutex<St
                 Err(RpcError::new("InvalidParams", "only LCU paths are allowed"))
             } else {
                 async {
-                    let (client, scheduler) = {
+                    let (client, scheduler, current_epoch) = {
                         let state = shared.lock().await;
-                        (state.lcu.clone(), state.scheduler.clone())
+                        (state.lcu.clone(), state.scheduler.clone(), state.epoch)
                     };
+                    if current_epoch != epoch {
+                        return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+                    }
                     let client = client
                         .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
                     let _permit =
@@ -2244,36 +2372,6 @@ fn apply_sgp_token_event(state: &mut State, token: String) {
     state.sgp_token_superseded = None;
 }
 
-async fn refresh_sgp_token(
-    state: &mut State,
-    previous_token: &Zeroizing<String>,
-) -> Result<(), RpcError> {
-    let _refresh_guard = state.sgp_refresh_lock.lock().await;
-    if state.sgp_token.as_ref() != Some(previous_token) {
-        return Ok(());
-    }
-    let client = state
-        .lcu
-        .clone()
-        .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
-    let data = client
-        .get_json_fresh("/entitlements/v1/token")
-        .await
-        .map_err(|error| RpcError::new("LcuError", error.to_string()))?;
-    let token = parse_sgp_token(&data)
-        .ok_or_else(|| RpcError::new("NotConnected", "SGP token is unavailable"))?;
-    if token == previous_token.as_str() {
-        return Err(RpcError::new(
-            "SgpError",
-            "SGP token did not change after refresh",
-        ));
-    }
-    state.sgp_token_superseded = Some(previous_token.clone());
-    state.sgp_token = Some(Zeroizing::new(token));
-    state.sgp_refresh_count = state.sgp_refresh_count.saturating_add(1);
-    Ok(())
-}
-
 fn sgp_rpc_error(error: LcuError) -> RpcError {
     RpcError::new("SgpError", error.to_string()).retryable(should_retry_sgp(&error))
 }
@@ -2357,6 +2455,7 @@ fn finish_write(
 }
 
 fn ensure_write_capacity(state: &mut State) -> Result<(), RpcError> {
+    prune_expired_completed_guards(&mut state.write_guards, unix_millis());
     if state.write_guards.len() >= MAX_PERSISTED_WRITE_GUARDS {
         return Err(RpcError::new(
             "ResourceDeferred",
@@ -2576,9 +2675,9 @@ fn event_topic(event: &LcuEvent) -> &'static str {
     }
 }
 
-impl State {
+impl NetworkSnapshot {
     async fn cached_asset(
-        &mut self,
+        &self,
         destination: PathBuf,
         source: AssetSource,
         max_bytes: usize,
@@ -2629,7 +2728,7 @@ impl State {
     }
 
     async fn fetch_asset_bytes(
-        &mut self,
+        &self,
         source: &AssetSource,
         max_bytes: usize,
         priority: Priority,
@@ -2652,22 +2751,8 @@ impl State {
                     .map_err(|error| RpcError::new("AssetError", error.to_string()))
             }
             AssetSource::External(url) => {
-                if self.asset.is_none() {
-                    self.asset = Some(
-                        AssetClient::new(
-                            self.external_proxy.as_deref(),
-                            vec![
-                                "raw.communitydragon.org".to_string(),
-                                "lol-api-champion.op.gg".to_string(),
-                                "game.gtimg.cn".to_string(),
-                            ],
-                        )
-                        .map_err(|error| RpcError::new("AssetError", error.to_string()))?,
-                    );
-                }
-                self.asset
-                    .as_ref()
-                    .unwrap()
+                let client = self.asset_client().await?;
+                client
                     .download(url, max_bytes)
                     .await
                     .map_err(|error| RpcError::new("AssetError", error.to_string()))
@@ -2678,7 +2763,7 @@ impl State {
     }
 
     async fn cache_icon(
-        &mut self,
+        &self,
         folder: &str,
         name: &str,
         path: Option<&str>,
@@ -2698,7 +2783,7 @@ impl State {
             .map(|path| path.to_string_lossy().to_string())
     }
 
-    async fn resolve_icon(&mut self, spec: String) -> String {
+    async fn resolve_icon(&self, spec: String) -> String {
         let Some((kind, value)) = spec
             .strip_prefix('@')
             .and_then(|value| value.split_once(':'))
@@ -2781,18 +2866,87 @@ impl State {
     async fn resolve_opgg_icons(&mut self, value: &mut Value) {
         seraphine_domain::opgg::resolve_icons(value, self).await;
     }
+}
 
-    async fn refresh_community(
-        &mut self,
-        kind: &str,
+impl NetworkSnapshot {
+    async fn build_catalog(&self, force: bool) -> Result<Value, RpcError> {
+        let client = self
+            .lcu
+            .clone()
+            .ok_or_else(|| RpcError::new("NotConnected", "LCU is not connected"))?;
+        let endpoints = [
+            "/lol-game-data/assets/v1/items.json",
+            "/lol-game-data/assets/v1/summoner-spells.json",
+            "/lol-game-data/assets/v1/perks.json",
+            "/lol-game-queues/v1/queues",
+            "/lol-game-data/assets/v1/champion-summary.json",
+            "/lol-game-data/assets/v1/skins.json",
+            "/lol-game-data/assets/v1/perkstyles.json",
+            "/lol-game-data/assets/v1/cherry-augments.json",
+        ];
+        let mut builder = CatalogBuilder::default();
+        let priority = if force { Priority::P1 } else { Priority::P4 };
+        for (index, endpoint) in endpoints.into_iter().enumerate() {
+            let permit = self
+                .scheduler
+                .try_acquire(priority, 512 * 1024)
+                .map_err(|error| {
+                    RpcError::new("ResourceDeferred", format!("{error:?}")).retryable(true)
+                })?;
+            let value = match client.get_json(endpoint).await {
+                Ok(value) => value,
+                Err(error) => {
+                    drop(permit);
+                    return Err(
+                        RpcError::new("LcuError", format!("{endpoint}: {error}")).retryable(true)
+                    );
+                }
+            };
+            drop(permit);
+            match index {
+                0 => builder.add_items(value),
+                1 => builder.add_spells(value),
+                2 => builder.add_runes(value),
+                3 => builder.add_queues(value),
+                4 => builder.add_champions(value),
+                5 => builder.add_skins(value),
+                6 => builder.add_perks(value),
+                7 => builder.add_augments(value),
+                _ => unreachable!(),
+            }
+        }
+        let snapshot = builder.build();
+        let payload = serde_json::to_vec(&snapshot)
+            .map_err(|error| RpcError::new("SerializeError", error.to_string()))?;
+        fs::create_dir_all(&self.catalog_root)
+            .map_err(|error| RpcError::new("IoError", error.to_string()))?;
+        let path = self.catalog_root.join("catalog.json");
+        write_file_atomic(&path, &payload)
+            .map_err(|error| RpcError::new("IoError", error.to_string()))?;
+        let mut state = self.shared.lock().await;
+        if state.epoch != self.epoch {
+            return Err(RpcError::new("InvalidParams", "stale connection epoch"));
+        }
+        state.index_catalog(&snapshot);
+        Ok(json!({
+            "path": path,
+            "bytes": payload.len(),
+            "epoch": self.epoch,
+        }))
+    }
+
+    async fn commit_champion_aliases(&self, data: &Value) {
+        self.shared.lock().await.cache_champion_aliases(data);
+    }
+
+    async fn refresh_champion_alias(
+        &self,
         force: bool,
         game_version: Option<&str>,
     ) -> Result<Value, RpcError> {
-        let filename = community_filename(kind)
-            .ok_or_else(|| RpcError::new("InvalidParams", "unknown community data kind"))?;
-        let path = self.data_root.join(filename);
+        let path = self.data_root.join("ChampionAlias.json");
         let mut cached = load_community_cache(&path, "champions");
-        if kind == "champion_alias" && cached.is_none() {
+        if cached.is_none() {
             cached = self
                 .champion_aliases
                 .as_ref()
@@ -2801,9 +2955,7 @@ impl State {
         if !force {
             if let (Some(game_version), Some(data)) = (game_version, cached.as_ref()) {
                 if data.get("version").and_then(Value::as_str) == Some(game_version) {
-                    if kind == "champion_alias" {
-                        self.cache_champion_aliases(data);
-                    }
+                    self.commit_champion_aliases(data).await;
                     return Ok(json!({
                         "available": true, "updated": false, "data": data, "warning": Value::Null
                     }));
@@ -2811,76 +2963,24 @@ impl State {
             }
         }
 
-        if kind == "aram_buff"
-            && env::var("SERAPHINE_ARAM_APPSECRET")
-                .map(|value| value.is_empty())
-                .unwrap_or(true)
-        {
-            if let Some(data) = cached {
-                return Ok(json!({
-                    "available": true,
-                    "updated": false,
-                    "data": data,
-                    "warning": "ARAM appsecret is not configured; cached data retained"
-                }));
-            }
-            return Ok(json!({
-                "available": false,
-                "updated": false,
-                "data": Value::Null,
-                "warning": "ARAM appsecret is not configured"
-            }));
-        }
-
-        if self.external.is_none() {
-            self.external = Some(
-                ExternalClient::new(self.external_proxy.as_deref())
-                    .map_err(|error| RpcError::new("ConnectionError", error.to_string()))?,
-            );
-        }
-        let max_bytes = if kind == "champion_alias" {
-            1024 * 1024
-        } else {
-            2 * 1024 * 1024
-        };
+        let client = self.external_client().await?;
+        let max_bytes = 1024 * 1024;
         let permit = self
             .scheduler
             .try_acquire(Priority::P3, max_bytes)
             .map_err(|error| RpcError::new("ResourceDeferred", format!("{error:?}")))?;
-        let fetched = if kind == "champion_alias" {
-            self.external
-                .as_ref()
-                .unwrap()
-                .get_legacy_json(CHAMPION_ALIAS_URL, "game.gtimg.cn", &json!({}), max_bytes)
-                .await
-                .map_err(|_| "upstream request failed")
-                .and_then(|raw| parse_champion_aliases(&raw).map_err(|_| "invalid alias data"))
-        } else {
-            let params = json!({
-                "appid": 1,
-                "appsecret": env::var("SERAPHINE_ARAM_APPSECRET").unwrap_or_default(),
-                "s": "news",
-                "c": "search",
-                "api_call_function": "module_list",
-                "pagesize": "200"
-            });
-            self.external
-                .as_ref()
-                .unwrap()
-                .get_legacy_json(ARAM_URL, "www.jddld.com", &params, max_bytes)
-                .await
-                .map_err(|_| "upstream request failed")
-                .and_then(|raw| parse_aram_buffs(&raw).map_err(|_| "invalid ARAM data"))
-        };
+        let fetched = client
+            .get_legacy_json(CHAMPION_ALIAS_URL, "game.gtimg.cn", &json!({}), max_bytes)
+            .await
+            .map_err(|_| "upstream request failed")
+            .and_then(|raw| parse_champion_aliases(&raw).map_err(|_| "invalid alias data"));
         drop(permit);
 
         let data = match fetched {
             Ok(data) => data,
             Err(error) => {
                 if let Some(data) = cached {
-                    if kind == "champion_alias" {
-                        self.cache_champion_aliases(&data);
-                    }
+                    self.commit_champion_aliases(&data).await;
                     return Ok(json!({
                         "available": true,
                         "updated": false,
@@ -2907,15 +3007,15 @@ impl State {
             }
             return Err(error);
         }
-        if kind == "champion_alias" {
-            self.cache_champion_aliases(&data);
-        }
+        self.commit_champion_aliases(&data).await;
         Ok(json!({
             "available": true, "updated": true, "data": data, "warning": Value::Null
         }))
     }
+}
 
-    async fn fetch_opgg(&mut self, url: String) -> Result<Value, RpcError> {
+impl NetworkSnapshot {
+    async fn fetch_opgg(&self, url: String) -> Result<Value, RpcError> {
         loop {
             match self.opgg_cache.start(&url) {
                 Start::Cached(value) => return Ok(value),
@@ -2925,27 +3025,15 @@ impl State {
                 Start::Leader => break,
             }
         }
-        if self.external.is_none() {
-            match ExternalClient::new(self.external_proxy.as_deref()) {
-                Ok(client) => self.external = Some(client),
-                Err(error) => {
-                    self.opgg_cache.fail(&url);
-                    return Err(RpcError::new("ConnectionError", error.to_string()));
-                }
-            }
-        }
+        let flight = CacheFlight::new(Arc::clone(&self.opgg_cache), url.clone());
+        let client = self.external_client().await?;
         let max_bytes = 2 * 1024 * 1024;
-        let _permit = match self.scheduler.try_acquire(Priority::P2, max_bytes) {
-            Ok(permit) => permit,
-            Err(error) => {
-                self.opgg_cache.fail(&url);
-                return Err(RpcError::new("ResourceDeferred", format!("{error:?}")));
-            }
-        };
-        let result = self
-            .external
-            .as_ref()
-            .unwrap()
+        let _permit = self
+            .scheduler
+            .acquire(Priority::P2, max_bytes)
+            .await
+            .map_err(|error| RpcError::new("ResourceDeferred", format!("{error:?}")))?;
+        let result = client
             .get_legacy_json(&url, "lol-api-champion.op.gg", &json!({}), max_bytes)
             .await
             .map_err(|error| RpcError::new("ExternalError", error.to_string()));
@@ -2956,18 +3044,16 @@ impl State {
                     .unwrap_or(max_bytes);
                 self.opgg_cache
                     .complete(&url, value.clone(), size, Duration::from_secs(60));
+                flight.disarm();
                 Ok(value)
             }
-            Err(error) => {
-                self.opgg_cache.fail(&url);
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl seraphine_domain::opgg::IconResolver for State {
+impl seraphine_domain::opgg::IconResolver for NetworkSnapshot {
     async fn resolve(&mut self, spec: String) -> String {
         self.resolve_icon(spec).await
     }
@@ -3005,6 +3091,10 @@ async fn execute_request(
     started.store(true, Ordering::Release);
     let response = if cancel_safe {
         handle_concurrent_read_request(&message, &shared).await
+    } else if message.op.as_deref() == Some("lcu.write") {
+        handle_write_request(&message, shared.clone()).await
+    } else if is_snapshot_network_op(message.op.as_deref().unwrap_or_default()) {
+        handle_snapshot_network_request(&message, shared.clone()).await
     } else {
         let mut state = shared.lock().await;
         handle_request(&message, &mut state).await
@@ -3227,13 +3317,15 @@ async fn run() -> io::Result<()> {
                     }
                     MessageKind::Request => {
                         let request_id = message.id.unwrap_or(0);
+                        let current_epoch = shared.lock().await.epoch;
+                        let request_epoch = message.epoch.unwrap_or(current_epoch);
                         if requests.contains_key(&request_id) {
                             queue_message(
                                 &outgoing_tx,
                                 &byte_budget,
                                 Message::response_error(
                                     request_id,
-                                    shared.lock().await.epoch,
+                                    request_epoch,
                                     RpcError::new("InvalidParams", "duplicate request id"),
                                 ),
                             )
@@ -3246,7 +3338,7 @@ async fn run() -> io::Result<()> {
                                 &byte_budget,
                                 Message::response_error(
                                     request_id,
-                                    shared.lock().await.epoch,
+                                    request_epoch,
                                     RpcError::new("ResourceDeferred", "too many pending requests")
                                         .retryable(true),
                                 ),
@@ -3254,7 +3346,6 @@ async fn run() -> io::Result<()> {
                             .await?;
                             continue;
                         }
-                        let epoch = shared.lock().await.epoch;
                         let deadline = message
                             .deadline_ms
                             .and_then(|milliseconds| tokio::time::Instant::now().checked_add(Duration::from_millis(milliseconds)));
@@ -3264,7 +3355,7 @@ async fn run() -> io::Result<()> {
                                 &byte_budget,
                                 Message::response_error(
                                     request_id,
-                                    epoch,
+                                    request_epoch,
                                     RpcError::new("DeadlineExceeded", "request deadline exceeded")
                                         .retryable(true),
                                 ),
@@ -3295,7 +3386,7 @@ async fn run() -> io::Result<()> {
                                 abandoned: false,
                                 cancel_safe,
                                 started_at: Instant::now(),
-                                epoch,
+                                epoch: request_epoch,
                             },
                         );
                     }
@@ -3547,15 +3638,37 @@ mod tests {
 
     #[tokio::test]
     async fn sgp_refresh_skips_when_token_already_changed() {
-        let mut state = State::new();
-        state.sgp_token = Some(Zeroizing::new("new-token".to_string()));
+        let shared = Arc::new(Mutex::new(State::new()));
+        {
+            let mut state = shared.lock().await;
+            state.epoch = 1;
+            state.sgp_token = Some(Zeroizing::new("new-token".to_string()));
+        }
+        let snapshot = {
+            let state = shared.lock().await;
+            state.network_snapshot(shared.clone())
+        };
         let previous = Zeroizing::new("old-token".to_string());
-        refresh_sgp_token(&mut state, &previous).await.unwrap();
-        assert_eq!(state.sgp_refresh_count, 0);
-        assert_eq!(
-            state.sgp_token.as_deref().map(String::as_str),
-            Some("new-token")
-        );
+        let token = snapshot.refresh_sgp_token(&previous).await.unwrap();
+        assert_eq!(token.as_str(), "new-token");
+        assert_eq!(shared.lock().await.sgp_refresh_count, 0);
+    }
+
+    #[tokio::test]
+    async fn sgp_snapshot_rejects_stale_epoch_before_network() {
+        let shared = Arc::new(Mutex::new(State::new()));
+        {
+            let mut state = shared.lock().await;
+            state.epoch = 1;
+            state.sgp_token = Some(Zeroizing::new("token".to_string()));
+        }
+        let snapshot = {
+            let state = shared.lock().await;
+            state.network_snapshot(shared.clone())
+        };
+        shared.lock().await.epoch = 2;
+        let error = snapshot.sgp_get("/test", None).await.unwrap_err();
+        assert_eq!(error.code, "InvalidParams");
     }
 
     #[test]
@@ -3757,5 +3870,99 @@ mod tests {
             ledger.get(&key).map(|entry| entry.state),
             Some(AutomationState::OutcomeUnknown)
         );
+    }
+
+    #[test]
+    fn expired_completed_guards_are_pruned_without_losing_unknowns() {
+        let now = unix_millis();
+        let mut guards = HashMap::new();
+        guards.insert(
+            "expired".to_string(),
+            PersistedWriteGuard {
+                request_hash: [1; 32],
+                completed: true,
+                completed_at_ms: now - WRITE_GUARD_RETENTION_MS - 1,
+            },
+        );
+        guards.insert(
+            "recent".to_string(),
+            PersistedWriteGuard {
+                request_hash: [2; 32],
+                completed: true,
+                completed_at_ms: now,
+            },
+        );
+        guards.insert(
+            "unknown".to_string(),
+            PersistedWriteGuard {
+                request_hash: [3; 32],
+                completed: false,
+                completed_at_ms: 0,
+            },
+        );
+        guards.insert(
+            "legacy".to_string(),
+            PersistedWriteGuard {
+                request_hash: [4; 32],
+                completed: true,
+                completed_at_ms: 0,
+            },
+        );
+        prune_expired_completed_guards(&mut guards, now);
+        assert!(!guards.contains_key("expired"));
+        assert!(guards.contains_key("recent"));
+        assert!(guards.contains_key("unknown"));
+        assert!(guards.contains_key("legacy"));
+    }
+
+    #[test]
+    fn full_guard_capacity_unblocks_after_expired_completed_prune() {
+        let directory = env::temp_dir().join(format!(
+            "seraphine-write-guard-prune-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("write-guards.json");
+        let now = unix_millis();
+        let mut guards = HashMap::new();
+        for index in 0..MAX_PERSISTED_WRITE_GUARDS {
+            guards.insert(
+                format!("{index:064x}"),
+                PersistedWriteGuard {
+                    request_hash: [index as u8; 32],
+                    completed: true,
+                    completed_at_ms: now - WRITE_GUARD_RETENTION_MS - 1,
+                },
+            );
+        }
+        let payload = write_guard_payload(&guards).unwrap();
+        write_file_atomic(&path, &payload).unwrap();
+        let mut state = State::new();
+        state.write_guard_path = path.clone();
+        state.write_guard_error = None;
+        state.write_guards = guards;
+        let operation = format!("{:064x}", MAX_PERSISTED_WRITE_GUARDS);
+        assert!(matches!(
+            claim_write_guard(&mut state, operation, [9; 32]),
+            Ok(WriteGuardClaim::Leader)
+        ));
+        assert_eq!(state.write_guards.len(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn snapshot_network_ops_bypass_the_control_state_lock() {
+        for op in [
+            "asset.get",
+            "opgg.positions",
+            "opgg.tier_list",
+            "opgg.champion_build",
+            "lcu.catalog",
+            "champion_alias.refresh",
+        ] {
+            assert!(is_snapshot_network_op(op), "{op}");
+        }
+        assert!(!is_snapshot_network_op("lcu.write"));
     }
 }

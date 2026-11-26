@@ -1,0 +1,31 @@
+[package]
+name = "seraphine-app"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.80"
+license = "GPL-3.0-only"
+
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+humantime = "2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+seraphine-core = { path = "../../crates/seraphine-core" }
+seraphine-platform = { path = "../../crates/platform" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+window-vibrancy = "0.6"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

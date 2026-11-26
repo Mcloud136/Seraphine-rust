@@ -328,7 +328,7 @@ class LcuWriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
             deadline_ms=100,
         )
         size = self.client._message_size(request)
-        self.client.pending[request_id] = (future, size)
+        self.client.pending[request_id] = (future, size, self.client.epoch)
         self.client._inflight_bytes += size
         await self.client._send(request)
         with self.assertRaises(RpcError) as raised:
@@ -366,6 +366,29 @@ class LcuWriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
         replay = await self.client.call("lcu.write", args)
         self.assertTrue(replay["replayed"])
         self.assertEqual(MockLcuHandler.write_attempts, 1)
+
+    async def test_health_is_not_blocked_during_slow_write(self):
+        MockLcuHandler.release_write.clear()
+        MockLcuHandler.write_started.clear()
+        args = {
+            "method": "POST",
+            "path": "/lol-champ-select/v1/session/actions/10",
+            "data": {"type": "pick", "championId": 1, "completed": True},
+            "operationId": "mock-operation-slow-health",
+        }
+        pending = asyncio.create_task(self.client.call("lcu.write", args, timeout=10))
+        try:
+            for _ in range(200):
+                if MockLcuHandler.write_started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            self.assertTrue(MockLcuHandler.write_started.is_set())
+            health = await asyncio.wait_for(self.client.health(), timeout=0.5)
+            self.assertEqual(health["protocol"], 1)
+        finally:
+            MockLcuHandler.release_write.set()
+        result = await pending
+        self.assertEqual(result["state"], "completed")
 
     async def test_unknown_outcome_blocks_retry(self):
         MockLcuHandler.apply_write = False

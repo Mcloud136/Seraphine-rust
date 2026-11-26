@@ -55,6 +55,17 @@ pub fn game_state_from_phase(phase: &str) -> GameState {
     }
 }
 
+fn accept_source_seq(last: &mut Option<u64>, source_seq: Option<u64>) -> bool {
+    let Some(source_seq) = source_seq else {
+        return true;
+    };
+    if last.is_some_and(|last| source_seq <= last) {
+        return false;
+    }
+    *last = Some(source_seq);
+    true
+}
+
 fn emit(sender: &mpsc::Sender<LcuEvent>, event: LcuEvent, stats: &Arc<WsStats>) -> bool {
     if sender.try_send(event).is_ok() {
         true
@@ -145,7 +156,6 @@ pub async fn run_websocket(
 ) {
     let mut backoff = Duration::from_millis(250);
     let sequence = AtomicU64::new(1);
-    let mut last_source_seq = None;
 
     'reconnect: loop {
         match shutdown.try_recv() {
@@ -163,6 +173,8 @@ pub async fn run_websocket(
             }
         };
         backoff = Duration::from_millis(250);
+        // WAMP sequence numbers are scoped to a connection and may reset.
+        let mut last_source_seq = None;
 
         let mut subscribed = true;
         for topic in &topics {
@@ -260,6 +272,7 @@ pub async fn run_websocket(
                 if !seen.insert(source_seq) {
                     continue;
                 }
+                last_source_seq = Some(source_seq);
             }
             if snapshots.iter().any(|snapshot| {
                 snapshot.uri == buffered.event.uri && snapshot.data == buffered.event.data
@@ -307,10 +320,9 @@ pub async fn run_websocket(
                         continue;
                     };
                     if let Some(source_seq) = source_seq {
-                        if last_source_seq.is_some_and(|last| source_seq <= last) {
+                        if !accept_source_seq(&mut last_source_seq, Some(source_seq)) {
                             continue;
                         }
-                        last_source_seq = Some(source_seq);
                     }
                     event.seq = sequence.fetch_add(1, Ordering::Relaxed);
                     stats.received.fetch_add(1, Ordering::Relaxed);
@@ -328,6 +340,24 @@ pub async fn run_websocket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_sequence_watermark_rejects_replays() {
+        let mut last = None;
+        assert!(accept_source_seq(&mut last, Some(10)));
+        assert!(!accept_source_seq(&mut last, Some(10)));
+        assert!(!accept_source_seq(&mut last, Some(9)));
+        assert!(accept_source_seq(&mut last, Some(11)));
+        assert!(accept_source_seq(&mut last, None));
+    }
+
+    #[test]
+    fn source_sequence_watermark_resets_for_new_connection() {
+        let mut old_connection = Some(100);
+        assert!(!accept_source_seq(&mut old_connection, Some(1)));
+        let mut new_connection = None;
+        assert!(accept_source_seq(&mut new_connection, Some(1)));
+    }
 
     #[test]
     fn maps_gameflow_phases() {

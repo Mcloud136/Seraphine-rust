@@ -49,6 +49,34 @@ pub enum Start {
     Wait(Arc<Notify>),
 }
 
+pub struct CacheFlight {
+    cache: Arc<JsonCache>,
+    key: String,
+    completed: bool,
+}
+
+impl CacheFlight {
+    pub fn new(cache: Arc<JsonCache>, key: String) -> Self {
+        Self {
+            cache,
+            key,
+            completed: false,
+        }
+    }
+
+    pub fn disarm(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for CacheFlight {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cache.fail(&self.key);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct JsonCache {
     values: Mutex<HashMap<String, CacheEntry>>,
@@ -164,5 +192,15 @@ mod tests {
     fn match_details_use_long_ttl() {
         assert!(JsonCache::ttl_for("/lol-match-history/v1/games/123") > Duration::from_secs(60));
         assert!(JsonCache::ttl_for("/lol-gameflow/v1/gameflow-phase") < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn dropped_leader_releases_inflight_waiters() {
+        let cache = Arc::new(JsonCache::default());
+        assert!(matches!(cache.start("key"), Start::Leader));
+        let flight = CacheFlight::new(Arc::clone(&cache), "key".to_string());
+        drop(flight);
+        assert!(matches!(cache.start("key"), Start::Leader));
+        assert_eq!(cache.metrics().coalesced, 0);
     }
 }
