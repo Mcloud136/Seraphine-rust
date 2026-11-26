@@ -9,6 +9,7 @@
 | 指标 | Python 版 | Rust/Tauri 版 | 变化 |
 | --- | --- | --- | --- |
 | 启动到窗口（5 次中位数） | 750 ms | 62 ms | 12.1× 更快 |
+| 启动到窗口（10 次中位数 / 首次冷启动） | — | 63 ms / 107 ms（热启动 60–64 ms） | — |
 | 启动到窗口（首次/冷启动） | 4,479 ms | 289–305 ms | 约 15× 更快 |
 | 主进程 Working Set（启动后 8 s） | 262.0 MB | 107.2 MB | 2.4× 更低 |
 | 进程树 Working Set（启动后 8 s） | 262.0 MB（1 进程） | 494.1 MB（7 进程，含 WebView2） | 约 1.9× 更高 |
@@ -50,7 +51,7 @@ python rust/app/scripts/analyze_game_frames.py frames.csv "League of Legends.exe
 
 - 目标 Intel 250KF 上的复测（当前证据为本机 i9-14900HX）。
 - 选人/对局中事件延迟与 OP.GG 加载时延（P50/P95/P99）。
-- 10 次启动中位数与冷/热启动区分。
+
 ## 回归与帧时间状态（2026-11-27）
 
 - Rust workspace release：93 通过，1 忽略（OP.GG 联网测试）。
