@@ -16,7 +16,7 @@
 | 英雄选择写操作（禁用/选用/交换/自动） | tools.py / sidecar | done | 2026-11-27 真机征召：技能 4/14、ban 安妮、pick 艾希并锁定；ban 需 BAN_PICK 首秒两步 PATCH（PLANNING 写入被客户端丢弃）；每局 nonce 防跨局守卫碰撞 |
 | 辅助工具（在线状态/背景/段位/代币/观战等） | auxiliary_interface.py | done | 在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（可逆）已接入；窗口修复 2026-11-27 真机：1920×1080 → 1280×720 并居中 |
 | ARAM 加成展示 | aram.py / game_info | done | 本地数据 + 对局信息展示；真机大乱斗待验 |
-| ARAM 远端更新 | aram_data.py | done | 校验/节流/原子替换/手动按钮；CI 生成与固定标签 `aram-data-latest` 发布跑通并校验 sha256；应用侧真机热更新已通过（16.22.1→16.23.1，经代理拉取，落盘 sha256/大小一致）。feed 默认空=仅内置快照，配置后启用 |
+| ARAM 远端更新 | aram_data.py | done | 校验/节流/原子替换/手动按钮；CI 生成已改为 Rust CLI（`rust/tools/aram-data`，与 Python 生成器逐字段一致）并发布到固定标签 `aram-data-latest`（sha256 校验通过）；应用侧真机热更新已通过（16.22.1→16.23.1）。feed 默认空=仅内置快照，配置后启用 |
 | OP.GG 榜单/出装/符文/图标 | opgg.py / opgg_window.py | done | 真机韩服榜单与出装、符文、竞技场强化 |
 | TFT 战绩 | career_interface.py / tools.py | done | 真机 20 场、前四率/平均排名/单位 |
 | TFT 信息条 | tft_game_infobar.py | done | TFT 战绩卡覆盖排名/等级/单位/强化，等价展示 |
