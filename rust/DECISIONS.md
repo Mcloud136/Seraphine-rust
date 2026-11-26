@@ -82,6 +82,13 @@ Context: 辅助工具、自动接受、BP 自动化依赖 LCU 写接口；此前
 Decision: 默认仍关闭；仅设置 `SERAPHINE_ENABLE_LCU_WRITES=1` 时启用。所有写入经 Allowlist、稳定 operation id、请求哈希、Champ Select 读回确认、`OutcomeUnknown` 阻断与 30 天完成记录（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。先上线辅助工具手动操作与自动接受对局，再逐步开放 BP/禁用/技能自动化。
 Consequences: 灰度运行需显式环境变量与真机确认；失败或结果未知时禁止盲目重试；Python 版仍保留作为回退。
 
+## ADR-015: ARAM 数据由 CI 生成并发布到固定标签
+
+Status: accepted (2026-11-27)
+Context: Wiki 的 Module:ChampionData/data 对非浏览器客户端可能返回 Cloudflare 403；应用内热更新需要一个稳定、可校验的 feed。
+Decision: 生成脚本以 Wiki 为主源，解析 Lua 表（含 `[1]=` 数字键与算术表达式）；403 等失败时回退到 jsdelivr 上 `balance-buff-viewer-plugin` 的预解析 `balance.json`（MIT，同 Wiki 数据）。CI 每次生成后把 `AramBuff.json` 与 `aram-manifest.json` 发布到当前仓库固定标签 `aram-data-latest`（内置 `GITHUB_TOKEN`），并提供 sha256/大小/版本校验。应用侧 feed 地址保持“按需配置”，避免首次启动依赖外网。
+Consequences: 数据更新不再依赖已停放的 jddld；GitHub runner 可直连 Wiki，本机被拦截时走回退源且与内置快照逐字段一致；固定标签下载 URL 长期稳定。
+
 ## ADR-013: 更新签名密钥由本地保管
 
 Status: accepted (2026-11-27，用户批准)
