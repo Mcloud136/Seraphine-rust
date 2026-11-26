@@ -47,6 +47,20 @@ const AVAILABILITY = [
   { value: "offline", label: "离线显示" },
 ];
 
+const TIER_LABELS: Record<string, string> = {
+  UNRANKED: "未定级",
+  IRON: "黑铁",
+  BRONZE: "青铜",
+  SILVER: "白银",
+  GOLD: "黄金",
+  PLATINUM: "铂金",
+  EMERALD: "翡翠",
+  DIAMOND: "钻石",
+  MASTER: "大师",
+  GRANDMASTER: "宗师",
+  CHALLENGER: "王者",
+};
+
 const TIERS = [
   "UNRANKED",
   "IRON",
@@ -352,15 +366,15 @@ export default function AuxiliaryPage() {
           </Field>
           <Field label="段位">
             <Dropdown
-              value={displayTier}
+              value={TIER_LABELS[displayTier] ?? displayTier}
               selectedOptions={[displayTier]}
               onOptionSelect={(_, data) =>
                 setDisplayTier(data.optionValue ?? "GOLD")
               }
             >
               {TIERS.map((tier) => (
-                <Option key={tier} value={tier}>
-                  {tier}
+                <Option key={tier} value={tier} text={TIER_LABELS[tier] ?? tier}>
+                  {TIER_LABELS[tier] ?? tier}
                 </Option>
               ))}
             </Dropdown>

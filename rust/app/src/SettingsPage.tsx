@@ -347,8 +347,7 @@ export default function SettingsPage({
         </MessageBar>
       )}
 
-      <div className={styles.grid}>
-        <section className={styles.card}>
+      <div className={styles.grid}>        <section className={styles.card}>
           <Title3>常规</Title3>
           <Field label="启动时检查更新">
             <Switch
@@ -414,6 +413,96 @@ export default function SettingsPage({
         </section>
 
         <section className={styles.card}>
+          <Title3>外观</Title3>
+          <Field label="主题模式">
+            <Dropdown
+              value={draft.theme.themeMode}
+              selectedOptions={[draft.theme.themeMode]}
+              onOptionSelect={(_, data) =>
+                updateTheme("themeMode", data.optionValue ?? "Light")
+              }
+            >
+              <Option value="Light">浅色</Option>
+              <Option value="Dark">深色</Option>
+            </Dropdown>
+          </Field>
+          <Field label="Mica 效果（Windows 11）">
+            <Switch
+              checked={draft.personalization.micaEnabled}
+              onChange={(_, data) =>
+                updatePersonalization("micaEnabled", data.checked)
+              }
+            />
+          </Field>
+          <Field label="DPI 缩放（重启生效）">
+            <Dropdown
+              value={draft.personalization.dpiScale}
+              selectedOptions={[draft.personalization.dpiScale]}
+              onOptionSelect={(_, data) =>
+                updatePersonalization("dpiScale", data.optionValue ?? "Auto")
+              }
+            >
+              {DPI_OPTIONS.map((item) => (
+                <Option key={item} value={item}>
+                  {item}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+          <Field label="语言（重启生效）">
+            <Dropdown
+              disabled
+              value={
+                LANGUAGE_OPTIONS.find(
+                  (item) => item.value === draft.personalization.language,
+                )?.label ?? draft.personalization.language
+              }
+              selectedOptions={[draft.personalization.language]}
+              onOptionSelect={(_, data) =>
+                updatePersonalization("language", data.optionValue ?? "Auto")
+              }
+            >
+              {LANGUAGE_OPTIONS.map((item) => (
+                <Option key={item.value} value={item.value}>
+                  {item.label}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+          <Caption1 className={styles.muted}>
+            当前版本中文优先；英文/葡语切换将在后续提供。
+          </Caption1>
+          <Field label="窗口尺寸">
+            <Input
+              value={draft.personalization.windowSize}
+              onChange={(_, data) =>
+                updatePersonalization("windowSize", data.value)
+              }
+            />
+          </Field>
+          <Field label="主题色">
+            <Input
+              value={draft.theme.themeColor}
+              onChange={(_, data) => updateTheme("themeColor", data.value)}
+            />
+          </Field>
+          <Field label="字体（逗号分隔）">
+            <Input
+              value={draft.theme.fontFamilies.join(", ")}
+              onChange={(_, data) =>
+                updateTheme(
+                  "fontFamilies",
+                  data.value
+                    .split(",")
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                )
+              }
+            />
+          </Field>
+        </section>
+
+        <section className={styles.card}>
           <Title3>网络与代理</Title3>
           <Field label="启用 GitHub 代理">
             <Switch
@@ -449,6 +538,38 @@ export default function SettingsPage({
           </Field>
           <Caption1 className={styles.muted}>
             代理修改在下次启动时应用到已有连接。
+          </Caption1>
+        </section>
+
+        <section className={styles.card}>
+          <Title3>软件更新</Title3>
+          <Caption1 className={styles.muted}>
+            当前版本 {appVersion || "2.0.0"}
+          </Caption1>
+          <div className={styles.row}>
+            <Button
+              size="small"
+              disabled={checkingUpdate || installingUpdate}
+              onClick={() => void checkUpdates()}
+            >
+              {checkingUpdate ? "检查中…" : "检查更新"}
+            </Button>
+            {update && (
+              <Button
+                size="small"
+                appearance="primary"
+                disabled={installingUpdate}
+                onClick={() => void installUpdate()}
+              >
+                {installingUpdate ? "安装中…" : `安装 ${update.version}`}
+              </Button>
+            )}
+          </div>
+          {updateStatus && (
+            <Caption1 className={styles.muted}>{updateStatus}</Caption1>
+          )}
+          <Caption1 className={styles.muted}>
+            更新源为 GitHub Releases；安装完成后应用会自动重启。
           </Caption1>
         </section>
 
@@ -594,127 +715,6 @@ export default function SettingsPage({
           </Field>
         </section>
 
-        <section className={styles.card}>
-          <Title3>软件更新</Title3>
-          <Caption1 className={styles.muted}>
-            当前版本 {appVersion || "2.0.0"}
-          </Caption1>
-          <div className={styles.row}>
-            <Button
-              size="small"
-              disabled={checkingUpdate || installingUpdate}
-              onClick={() => void checkUpdates()}
-            >
-              {checkingUpdate ? "检查中…" : "检查更新"}
-            </Button>
-            {update && (
-              <Button
-                size="small"
-                appearance="primary"
-                disabled={installingUpdate}
-                onClick={() => void installUpdate()}
-              >
-                {installingUpdate ? "安装中…" : `安装 ${update.version}`}
-              </Button>
-            )}
-          </div>
-          {updateStatus && (
-            <Caption1 className={styles.muted}>{updateStatus}</Caption1>
-          )}
-          <Caption1 className={styles.muted}>
-            更新源为 GitHub Releases；安装完成后应用会自动重启。
-          </Caption1>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>外观</Title3>
-          <Field label="主题模式">
-            <Dropdown
-              value={draft.theme.themeMode}
-              selectedOptions={[draft.theme.themeMode]}
-              onOptionSelect={(_, data) =>
-                updateTheme("themeMode", data.optionValue ?? "Light")
-              }
-            >
-              <Option value="Light">浅色</Option>
-              <Option value="Dark">深色</Option>
-            </Dropdown>
-          </Field>
-          <Field label="Mica 效果（Windows 11）">
-            <Switch
-              checked={draft.personalization.micaEnabled}
-              onChange={(_, data) =>
-                updatePersonalization("micaEnabled", data.checked)
-              }
-            />
-          </Field>
-          <Field label="DPI 缩放（重启生效）">
-            <Dropdown
-              value={draft.personalization.dpiScale}
-              selectedOptions={[draft.personalization.dpiScale]}
-              onOptionSelect={(_, data) =>
-                updatePersonalization("dpiScale", data.optionValue ?? "Auto")
-              }
-            >
-              {DPI_OPTIONS.map((item) => (
-                <Option key={item} value={item}>
-                  {item}
-                </Option>
-              ))}
-            </Dropdown>
-          </Field>
-          <Field label="语言（重启生效）">
-            <Dropdown
-              disabled
-              value={
-                LANGUAGE_OPTIONS.find(
-                  (item) => item.value === draft.personalization.language,
-                )?.label ?? draft.personalization.language
-              }
-              selectedOptions={[draft.personalization.language]}
-              onOptionSelect={(_, data) =>
-                updatePersonalization("language", data.optionValue ?? "Auto")
-              }
-            >
-              {LANGUAGE_OPTIONS.map((item) => (
-                <Option key={item.value} value={item.value}>
-                  {item.label}
-                </Option>
-              ))}
-            </Dropdown>
-          </Field>
-          <Caption1 className={styles.muted}>
-            当前版本中文优先；英文/葡语切换将在后续提供。
-          </Caption1>
-          <Field label="窗口尺寸">
-            <Input
-              value={draft.personalization.windowSize}
-              onChange={(_, data) =>
-                updatePersonalization("windowSize", data.value)
-              }
-            />
-          </Field>
-          <Field label="主题色">
-            <Input
-              value={draft.theme.themeColor}
-              onChange={(_, data) => updateTheme("themeColor", data.value)}
-            />
-          </Field>
-          <Field label="字体（逗号分隔）">
-            <Input
-              value={draft.theme.fontFamilies.join(", ")}
-              onChange={(_, data) =>
-                updateTheme(
-                  "fontFamilies",
-                  data.value
-                    .split(",")
-                    .map((item) => item.trim())
-                    .filter(Boolean),
-                )
-              }
-            />
-          </Field>
-        </section>
       </div>
     </div>
   );

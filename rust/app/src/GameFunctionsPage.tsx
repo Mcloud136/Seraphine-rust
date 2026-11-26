@@ -273,33 +273,17 @@ export default function GameFunctionsPage({
               onChange={(_, data) => update("enableAutoReconnect", data.checked)}
             />
           </Field>
-          <Field label="自动接受交换">
+          <Field label="自动接受换位（楼层交换）">
             <Switch
               checked={draft.autoAcceptCeilSwap}
               onChange={(_, data) => update("autoAcceptCeilSwap", data.checked)}
             />
           </Field>
-          <Field label="自动接受英雄交易">
+          <Field label="自动接受英雄交换">
             <Switch
               checked={draft.autoAcceptChampTrade}
               onChange={(_, data) =>
                 update("autoAcceptChampTrade", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动禁用英雄">
-            <Switch
-              checked={draft.enableAutoBanChampion}
-              onChange={(_, data) =>
-                update("enableAutoBanChampion", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动选用英雄">
-            <Switch
-              checked={draft.enableAutoSelectChampion}
-              onChange={(_, data) =>
-                update("enableAutoSelectChampion", data.checked)
               }
             />
           </Field>
@@ -345,8 +329,24 @@ export default function GameFunctionsPage({
               ))}
             </Dropdown>
           </Field>
+          <Field label="自动禁用英雄">
+            <Switch
+              checked={draft.enableAutoBanChampion}
+              onChange={(_, data) =>
+                update("enableAutoBanChampion", data.checked)
+              }
+            />
+          </Field>
           <Caption1 className={styles.muted}>自动禁用名单</Caption1>
           {renderChampionList(banKey, banList)}
+          <Field label="自动选用英雄">
+            <Switch
+              checked={draft.enableAutoSelectChampion}
+              onChange={(_, data) =>
+                update("enableAutoSelectChampion", data.checked)
+              }
+            />
+          </Field>
           <Caption1 className={styles.muted}>自动选用名单</Caption1>
           {renderChampionList(selectKey, selectList)}
           <Field label="自动设置召唤师技能">

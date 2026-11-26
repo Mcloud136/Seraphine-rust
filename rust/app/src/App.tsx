@@ -29,6 +29,7 @@ import {
   GamesRegular,
   HomeRegular,
   OptionsRegular,
+  PuzzlePieceRegular,
   PersonRegular,
   SearchRegular,
   SettingsRegular,
@@ -563,7 +564,7 @@ export default function App() {
               </Tab>
               <Tab
                 value="tft"
-                icon={<GamesRegular />}
+                icon={<PuzzlePieceRegular />}
                 title="云顶之弈"
                 style={collapsed ? { minWidth: 0 } : undefined}
               >
@@ -587,6 +588,7 @@ export default function App() {
               </Tab>
             </TabList>
             <div className={styles.navSpacer} />
+            <Divider />
             <div
               className={styles.actionsRow}
               style={{ flexDirection: collapsed ? "column" : "row" }}
@@ -623,7 +625,6 @@ export default function App() {
             </div>
             {!collapsed && (
               <>
-                <Divider />
                 {status?.connected ? (
                   <>
                     <Caption1 className={styles.muted}>
