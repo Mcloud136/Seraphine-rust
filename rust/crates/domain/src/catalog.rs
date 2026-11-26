@@ -45,7 +45,10 @@ impl CatalogBuilder {
                     insert_map(
                         &mut self.spells,
                         id,
-                        json!({ "iconPath": item.get("iconPath").cloned().unwrap_or(Value::Null) }),
+                        json!({
+                            "name": item.get("name").cloned().unwrap_or(Value::Null),
+                            "iconPath": item.get("iconPath").cloned().unwrap_or(Value::Null),
+                        }),
                     );
                 }
             }

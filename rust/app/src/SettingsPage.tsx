@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -17,6 +17,8 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
+import { AssetImage } from "./AssetImage";
+import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
@@ -36,23 +38,24 @@ const useStyles = makeStyles({
     gap: "12px",
   },
   grid: {
-    display: "grid",
-    gridTemplateColumns: "1fr",
-    gap: "12px",
-    alignItems: "start",
-    "@media (min-width: 1100px)": {
-      gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-    },
+    display: "block",
+    columnWidth: "360px",
+    columnGap: "12px",
   },
   card: {
     padding: "14px 16px",
     borderRadius: "10px",
     background: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: "flex",
+    display: "inline-flex",
     flexDirection: "column",
     gap: "10px",
     minWidth: 0,
+    width: "100%",
+    maxWidth: "560px",
+    breakInside: "avoid",
+    marginBottom: "12px",
+    verticalAlign: "top",
   },
   row: {
     display: "flex",
@@ -149,9 +152,9 @@ export default function SettingsPage({
   const [aramMessage, setAramMessage] = useState("");
   const [listPosition, setListPosition] = useState("general");
   const [champions, setChampions] = useState<Record<string, string>>({});
-  const [spells, setSpells] = useState<Record<string, { iconPath?: string }>>(
-    {},
-  );
+  const [spells, setSpells] = useState<
+    Record<string, { name?: string; iconPath?: string }>
+  >({});
   const [queues, setQueues] = useState<Record<string, { name?: string }>>({});
   const [clients, setClients] = useState<
     { pid: number; port?: number; server?: string }[]
@@ -214,7 +217,7 @@ export default function SettingsPage({
   useEffect(() => {
     void invoke<{
       champions?: Record<string, string>;
-      spells?: Record<string, { iconPath?: string }>;
+      spells?: Record<string, { name?: string; iconPath?: string }>;
       queues?: Record<string, { name?: string }>;
     }>("catalog_get")
       .then((catalog) => {
@@ -281,9 +284,35 @@ export default function SettingsPage({
   const spellList = (draft.functions[spellKey] as number[] | undefined) ?? [
     54, 54,
   ];
-  const spellOptions = Object.keys(spells)
-    .map(Number)
-    .sort((left, right) => left - right);
+  const [picker, setPicker] = useState<{
+    title: string;
+    items: PickerItem[];
+    selected: number[];
+    multiple: boolean;
+    onConfirm: (ids: number[]) => void;
+  } | null>(null);
+
+  const championItems = useMemo<PickerItem[]>(
+    () =>
+      Object.entries(champions).map(([id, name]) => ({
+        id: Number(id),
+        name,
+        icon: `/lol-game-data/assets/v1/champion-icons/${id}.png`,
+      })),
+    [champions],
+  );
+
+  const spellItems = useMemo<PickerItem[]>(
+    () =>
+      Object.entries(spells)
+        .map(([id, spell]) => ({
+          id: Number(id),
+          name: spell.name || `技能 ${id}`,
+          icon: spell.iconPath,
+        }))
+        .filter((spell) => spell.id !== 54 && spell.name !== "占位"),
+    [spells],
+  );
 
   function updateList(key: string, values: number[]) {
     setDraft((current) => ({
@@ -366,10 +395,6 @@ export default function SettingsPage({
   }
 
   function renderChampionList(listKey: string, values: number[]) {
-    const available = Object.entries(champions)
-      .map(([id, name]) => ({ id: Number(id), name }))
-      .filter((champion) => !values.includes(champion.id))
-      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -394,27 +419,20 @@ export default function SettingsPage({
             <Caption1 className={styles.muted}>尚未选择英雄</Caption1>
           )}
         </div>
-        <Dropdown
-          aria-label="添加英雄"
-          value="添加英雄…"
-          selectedOptions={[]}
-          onOptionSelect={(_, data) => {
-            const id = Number(data.optionValue);
-            if (id > 0 && !values.includes(id)) {
-              updateList(listKey, [...values, id]);
-            }
-          }}
+        <Button
+          appearance="secondary"
+          onClick={() =>
+            setPicker({
+              title: "选择英雄",
+              items: championItems,
+              selected: values,
+              multiple: true,
+              onConfirm: (ids) => updateList(listKey, ids),
+            })
+          }
         >
-          {available.map((champion) => (
-            <Option
-              key={champion.id}
-              value={String(champion.id)}
-              text={`${champion.name} #${champion.id}`}
-            >
-              {`${champion.name} #${champion.id}`}
-            </Option>
-          ))}
-        </Dropdown>
+          选择英雄…
+        </Button>
       </div>
     );
   }
@@ -801,31 +819,45 @@ export default function SettingsPage({
           {renderChampionList(selectKey, selectList)}
           <Caption1 className={styles.muted}>自动召唤师技能（D / F）</Caption1>
           <div style={{ display: "flex", gap: 8 }}>
-            {[0, 1].map((index) => (
-              <Dropdown
-                key={`spell-${index}`}
-                aria-label={`召唤师技能 ${index + 1}`}
-                value={`技能 ${spellList[index] ?? 54}`}
-                selectedOptions={[String(spellList[index] ?? 54)]}
-                onOptionSelect={(_, data) => {
-                  const id = Number(data.optionValue);
-                  if (!id) return;
-                  const next = [spellList[0] ?? 54, spellList[1] ?? 54];
-                  next[index] = id;
-                  updateList(spellKey, next);
-                }}
-              >
-                {spellOptions.map((id) => (
-                  <Option
-                    key={id}
-                    value={String(id)}
-                    text={`召唤师技能 ${id}`}
-                  >
-                    {`技能 ${id}`}
-                  </Option>
-                ))}
-              </Dropdown>
-            ))}
+            {[0, 1].map((index) => {
+              const spellId = spellList[index] ?? 54;
+              const spell = spells[String(spellId)];
+              const empty =
+                spellId === 54 || !spell?.name || spell.name === "占位";
+              return (
+                <Button
+                  key={`spell-${index}`}
+                  appearance="secondary"
+                  icon={
+                    <AssetImage
+                      path={spell?.iconPath}
+                      size={20}
+                      radius={4}
+                      title={empty ? "未选择" : spell?.name}
+                    />
+                  }
+                  onClick={() =>
+                    setPicker({
+                      title: `选择召唤师技能（${index === 0 ? "D" : "F"}）`,
+                      items: spellItems,
+                      selected: [spellId],
+                      multiple: false,
+                      onConfirm: (ids) => {
+                        if (!ids.length) return;
+                        const next = [
+                          spellList[0] ?? 54,
+                          spellList[1] ?? 54,
+                        ];
+                        next[index] = ids[0];
+                        updateList(spellKey, next);
+                      },
+                    })
+                  }
+                >
+                  {empty ? "未选择" : spell?.name}
+                </Button>
+              );
+            })}
           </div>
           <Caption1 className={styles.muted}>
             按分路保存；需同时开启上方“自动禁用英雄 / 自动选择英雄”。实际写操作仍受策略开关约束。
@@ -1058,6 +1090,17 @@ export default function SettingsPage({
           </Field>
         </section>
       </div>
+      {picker && (
+        <IconPickerDialog
+          open
+          title={picker.title}
+          items={picker.items}
+          selected={picker.selected}
+          multiple={picker.multiple}
+          onConfirm={picker.onConfirm}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </div>
   );
 }
