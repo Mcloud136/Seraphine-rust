@@ -235,7 +235,8 @@ const useStyles = makeStyles({
     display: "flex",
     gap: "6px",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
+    paddingLeft: "2px",
     paddingBottom: "4px",
   },
   actionRound: {

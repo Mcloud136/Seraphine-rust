@@ -30,15 +30,17 @@ const useStyles = makeStyles({
   },
   grid: {
     display: "block",
-    columnWidth: "360px",
     columnGap: "12px",
+    columnCount: 1,
+    "@media (min-width: 720px)": { columnCount: 2 },
+    "@media (min-width: 1180px)": { columnCount: 3 },
   },
   card: {
     padding: "14px 16px",
     borderRadius: "10px",
     background: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: "inline-flex",
+    display: "flex",
     flexDirection: "column",
     gap: "10px",
     minWidth: 0,
@@ -46,7 +48,6 @@ const useStyles = makeStyles({
     maxWidth: "368px",
     breakInside: "avoid",
     marginBottom: "12px",
-    verticalAlign: "top",
   },
   muted: { color: tokens.colorNeutralForeground3 },
 });
@@ -98,7 +99,6 @@ export default function GameFunctionsPage({
   const [draft, setDraft] = useState<FunctionConfig>(config.functions);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [aramUpdating, setAramUpdating] = useState(false);
   const [listPosition, setListPosition] = useState("general");
   const [champions, setChampions] = useState<Record<string, string>>({});
   const [spells, setSpells] = useState<
@@ -170,19 +170,6 @@ export default function GameFunctionsPage({
       setMessage(String(cause));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function refreshAram() {
-    setAramUpdating(true);
-    setMessage("");
-    try {
-      await invoke("aram_update", { force: true });
-      setMessage("已完成 ARAM 数据检查。");
-    } catch (cause) {
-      setMessage(String(cause));
-    } finally {
-      setAramUpdating(false);
     }
   }
 
@@ -324,12 +311,6 @@ export default function GameFunctionsPage({
               }
             />
           </Field>
-          <Field label="自动设置召唤师技能">
-            <Switch
-              checked={draft.enableAutoSetSpells}
-              onChange={(_, data) => update("enableAutoSetSpells", data.checked)}
-            />
-          </Field>
           <Field label="禁用时避开队友预选">
             <Switch
               checked={draft.prententBan}
@@ -345,68 +326,6 @@ export default function GameFunctionsPage({
               }
             />
           </Field>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>对局信息与 OP.GG</Title3>
-          <Field label="英雄选择时显示 OP.GG">
-            <Switch
-              checked={draft.autoShowOpgg}
-              onChange={(_, data) => update("autoShowOpgg", data.checked)}
-            />
-          </Field>
-          <Field label="OP.GG 窗口置顶">
-            <Switch
-              checked={draft.enableOpggOnTop}
-              onChange={(_, data) => update("enableOpggOnTop", data.checked)}
-            />
-          </Field>
-          <Field label="对局信息显示段位">
-            <Switch
-              checked={draft.showTierInGameInfo}
-              onChange={(_, data) => update("showTierInGameInfo", data.checked)}
-            />
-          </Field>
-          <Field label="对局信息过滤">
-            <Switch
-              checked={draft.gameInfoFilter}
-              onChange={(_, data) => update("gameInfoFilter", data.checked)}
-            />
-          </Field>
-          <Field label="自动随机皮肤">
-            <Switch
-              checked={draft.enableRandomSkin}
-              onChange={(_, data) => update("enableRandomSkin", data.checked)}
-            />
-          </Field>
-          <Field label="保留对局信息">
-            <Switch
-              checked={draft.enableReserveGameinfo}
-              onChange={(_, data) =>
-                update("enableReserveGameinfo", data.checked)
-              }
-            />
-          </Field>
-          <Field label="ARAM 数据自动更新">
-            <Switch
-              checked={draft.aramDataAutoUpdate}
-              onChange={(_, data) => update("aramDataAutoUpdate", data.checked)}
-            />
-          </Field>
-          <Field label="ARAM 数据源地址">
-            <Input
-              value={draft.aramDataFeedUrl}
-              placeholder="https://github.com/.../aram-manifest.json"
-              onChange={(_, data) => update("aramDataFeedUrl", data.value)}
-            />
-          </Field>
-          <Button
-            size="small"
-            disabled={aramUpdating}
-            onClick={() => void refreshAram()}
-          >
-            {aramUpdating ? "更新中…" : "立即检查 ARAM 更新"}
-          </Button>
         </section>
 
         <section className={styles.card}>
@@ -430,6 +349,12 @@ export default function GameFunctionsPage({
           {renderChampionList(banKey, banList)}
           <Caption1 className={styles.muted}>自动选用名单</Caption1>
           {renderChampionList(selectKey, selectList)}
+          <Field label="自动设置召唤师技能">
+            <Switch
+              checked={draft.enableAutoSetSpells}
+              onChange={(_, data) => update("enableAutoSetSpells", data.checked)}
+            />
+          </Field>
           <Caption1 className={styles.muted}>自动召唤师技能（D / F）</Caption1>
           <div style={{ display: "flex", gap: 8 }}>
             {[0, 1].map((index) => {

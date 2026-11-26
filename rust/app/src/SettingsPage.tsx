@@ -45,7 +45,7 @@ const useStyles = makeStyles({
     borderRadius: "10px",
     background: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: "inline-flex",
+    display: "flex",
     flexDirection: "column",
     gap: "10px",
     minWidth: 0,
@@ -53,7 +53,6 @@ const useStyles = makeStyles({
     maxWidth: "368px",
     breakInside: "avoid",
     marginBottom: "12px",
-    verticalAlign: "top",
   },
   row: {
     display: "flex",
@@ -122,11 +121,9 @@ export default function SettingsPage({
   const [draft, setDraft] = useState<AppConfig>(config);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [aramBusy, setAramBusy] = useState(false);
+  const [aramMessage, setAramMessage] = useState("");
   const [queues, setQueues] = useState<Record<string, { name?: string }>>({});
-  const [clients, setClients] = useState<
-    { pid: number; port?: number; server?: string }[]
-  >([]);
-  const [currentPid, setCurrentPid] = useState<number | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [update, setUpdate] = useState<Update | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -138,48 +135,6 @@ export default function SettingsPage({
       .then(setAppVersion)
       .catch(() => undefined);
   }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    async function load() {
-      try {
-        const [list, status] = await Promise.all([
-          invoke<{ pid: number; port?: number; server?: string }[]>("lcu_clients"),
-          invoke<{ connected: boolean; pid: number }>("session_status"),
-        ]);
-        if (!disposed) {
-          setClients(list);
-          setCurrentPid(status.connected ? status.pid : null);
-        }
-      } catch {
-        // ignore polling errors
-      }
-    }
-    void load();
-    const timer = window.setInterval(() => void load(), 5000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  async function connectClient(pid: number) {
-    try {
-      await invoke("session_connect", { pid });
-      setCurrentPid(pid);
-    } catch (cause) {
-      setMessage(String(cause));
-    }
-  }
-
-  async function disconnectClient() {
-    try {
-      await invoke("session_disconnect");
-      setCurrentPid(null);
-    } catch (cause) {
-      setMessage(String(cause));
-    }
-  }
 
   useEffect(() => {
     void invoke<{ queues?: Record<string, { name?: string }> }>("catalog_get")
@@ -339,6 +294,19 @@ export default function SettingsPage({
     }
   }
 
+  async function refreshAram() {
+    setAramBusy(true);
+    setAramMessage("");
+    try {
+      await invoke("aram_update", { force: true });
+      setAramMessage("已完成 ARAM 数据检查。");
+    } catch (cause) {
+      setAramMessage(String(cause));
+    } finally {
+      setAramBusy(false);
+    }
+  }
+
   async function save() {
     setSaving(true);
     setMessage("");
@@ -485,6 +453,85 @@ export default function SettingsPage({
         </section>
 
         <section className={styles.card}>
+          <Title3>对局信息与 OP.GG</Title3>
+          <Field label="英雄选择时显示 OP.GG">
+            <Switch
+              checked={draft.functions.autoShowOpgg}
+              onChange={(_, data) =>
+                updateFunctions("autoShowOpgg", data.checked)
+              }
+            />
+          </Field>
+          <Field label="OP.GG 窗口置顶">
+            <Switch
+              checked={draft.functions.enableOpggOnTop}
+              onChange={(_, data) =>
+                updateFunctions("enableOpggOnTop", data.checked)
+              }
+            />
+          </Field>
+          <Field label="对局信息显示段位">
+            <Switch
+              checked={draft.functions.showTierInGameInfo}
+              onChange={(_, data) =>
+                updateFunctions("showTierInGameInfo", data.checked)
+              }
+            />
+          </Field>
+          <Field label="对局信息过滤">
+            <Switch
+              checked={draft.functions.gameInfoFilter}
+              onChange={(_, data) =>
+                updateFunctions("gameInfoFilter", data.checked)
+              }
+            />
+          </Field>
+          <Field label="自动随机皮肤">
+            <Switch
+              checked={draft.functions.enableRandomSkin}
+              onChange={(_, data) =>
+                updateFunctions("enableRandomSkin", data.checked)
+              }
+            />
+          </Field>
+          <Field label="保留对局信息">
+            <Switch
+              checked={draft.functions.enableReserveGameinfo}
+              onChange={(_, data) =>
+                updateFunctions("enableReserveGameinfo", data.checked)
+              }
+            />
+          </Field>
+          <Field label="ARAM 数据自动更新">
+            <Switch
+              checked={draft.functions.aramDataAutoUpdate}
+              onChange={(_, data) =>
+                updateFunctions("aramDataAutoUpdate", data.checked)
+              }
+            />
+          </Field>
+          <Field label="ARAM 数据源地址">
+            <Input
+              value={draft.functions.aramDataFeedUrl}
+              placeholder="https://github.com/.../aram-manifest.json"
+              onChange={(_, data) =>
+                updateFunctions("aramDataFeedUrl", data.value)
+              }
+            />
+          </Field>
+          <Button
+            size="small"
+            disabled={aramBusy}
+            onClick={() => void refreshAram()}
+          >
+            {aramBusy ? "更新中…" : "立即检查 ARAM 更新"}
+          </Button>
+          {aramMessage && (
+            <Caption1 className={styles.muted}>{aramMessage}</Caption1>
+          )}
+        </section>
+
+        <section className={styles.card}>
           <Title3>对局筛选</Title3>
           <Caption1 className={styles.muted}>
             选择每种模式下计入近期战绩的队列；留空表示不限制。
@@ -576,47 +623,6 @@ export default function SettingsPage({
           )}
           <Caption1 className={styles.muted}>
             更新源为 GitHub Releases；安装完成后应用会自动重启。
-          </Caption1>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>客户端连接</Title3>
-          {clients.length === 0 && (
-            <Caption1 className={styles.muted}>未检测到英雄联盟客户端</Caption1>
-          )}
-          {clients.map((client) => (
-            <div className={styles.row} key={client.pid}>
-              <div>
-                <Caption1>
-                  {client.server || "未知区服"} · PID {client.pid} · 端口{" "}
-                  {client.port ?? "-"}
-                </Caption1>
-              </div>
-              {currentPid === client.pid ? (
-                <Badge appearance="tint" color="success">
-                  已连接
-                </Badge>
-              ) : (
-                <Button
-                  size="small"
-                  onClick={() => void connectClient(client.pid)}
-                >
-                  连接
-                </Button>
-              )}
-            </div>
-          ))}
-          {currentPid !== null && (
-            <Button
-              size="small"
-              appearance="subtle"
-              onClick={() => void disconnectClient()}
-            >
-              断开当前连接
-            </Button>
-          )}
-          <Caption1 className={styles.muted}>
-            多开时一次只能连接一个客户端；切换后事件流会重新建立。
           </Caption1>
         </section>
 
