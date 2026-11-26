@@ -64,10 +64,24 @@ jobs:
         run: .\make.ps1
 
       - name: Package smoke
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m tests.bench.package_smoke .\dist\Seraphine
+          python - <<'PY'
+          import sys
+          import traceback
+
+          sys.argv = ["package_smoke", "dist/Seraphine"]
+          try:
+              from tests.bench.package_smoke import main
+              main()
+          except BaseException:
+              lines = traceback.format_exc().strip().splitlines()
+              print("::error title=smoke-failure::" + " | ".join(lines[-4:])[:900])
+              print("\n".join(lines))
+              raise
+          PY
           echo "SUCCESS=true" >> $GITHUB_ENV
 
       - name: Upload artifact
