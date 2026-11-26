@@ -23,7 +23,7 @@ class CachePathTests(unittest.TestCase):
             ):
                 result = ensure_cache_root(root)
 
-            self.assertEqual(result, cache)
+            self.assertEqual(result, cache.resolve())
             self.assertEqual(
                 (cache / "champion icons" / "1.png").read_bytes(),
                 b"new",
