@@ -378,9 +378,7 @@ mod tests {
     fn accepts_selection_during_planning() {
         let mut data = session();
         data["timer"]["phase"] = json!("PLANNING");
-        assert!(
-            validate_write(&data, "/lol-champ-select/v1/session/my-selection", None).is_ok()
-        );
+        assert!(validate_write(&data, "/lol-champ-select/v1/session/my-selection", None).is_ok());
     }
 
     #[test]

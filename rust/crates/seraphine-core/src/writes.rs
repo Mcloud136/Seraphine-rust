@@ -225,8 +225,9 @@ async fn confirm_once(
     data: Option<&Value>,
 ) -> Result<(), String> {
     match session.lcu_get_fresh(CHAMP_SELECT_SESSION).await {
-        Ok(session) => confirm_write(&session, path, data)
-            .map_err(|error| error.as_str().to_string()),
+        Ok(session) => {
+            confirm_write(&session, path, data).map_err(|error| error.as_str().to_string())
+        }
         Err(error) => Err(error.to_string()),
     }
 }
