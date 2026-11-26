@@ -99,6 +99,9 @@ impl CatalogBuilder {
             let Some(id) = champion.get("id") else {
                 continue;
             };
+            if id.as_i64().is_some_and(|value| value >= 60_000) {
+                continue;
+            }
             let Some(name) = champion.get("name").and_then(Value::as_str) else {
                 continue;
             };
@@ -247,6 +250,27 @@ mod tests {
         assert_eq!(snapshot["items"]["1"]["iconPath"], "/item.png");
         assert_eq!(snapshot["champs"]["1"], "Annie");
         assert_eq!(snapshot["queues"]["420"]["name"], "Ranked");
+    }
+
+    #[test]
+    fn ignores_classic_champion_variants() {
+        let snapshot = build_snapshot(
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([]),
+            json!([
+                { "id": 22, "name": "Ashe", "alias": "Ashe" },
+                { "id": 60022, "name": "Ashe", "alias": "Jade_Ashe" }
+            ]),
+            json!({}),
+            json!({ "styles": [] }),
+            json!([]),
+        );
+        assert_eq!(snapshot["champs"]["22"], "Ashe");
+        assert!(snapshot["champs"].get("60022").is_none());
+        assert_eq!(snapshot["champAliases"]["ashe"], 22);
+        assert!(snapshot["champAliases"].get("jade_ashe").is_none());
     }
 
     #[test]

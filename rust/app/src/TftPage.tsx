@@ -215,7 +215,7 @@ export default function TftPage({
               </Caption1>
               {game.augments.length > 0 && (
                 <Caption1 className={styles.muted}>
-                  强化：{game.augments.map((a) => a.name || a.id).join(" / ")}
+                  强化符文：{game.augments.map((a) => a.name || a.id).join(" / ")}
                 </Caption1>
               )}
             </div>

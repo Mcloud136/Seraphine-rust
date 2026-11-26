@@ -32,7 +32,7 @@ const useStyles = makeStyles({
     gap: "10px",
     minWidth: 0,
     width: "100%",
-    maxWidth: "560px",
+    maxWidth: "368px",
     breakInside: "avoid",
     marginBottom: "12px",
     verticalAlign: "top",
@@ -193,19 +193,6 @@ export default function AuxiliaryPage() {
     }
   }
 
-  async function fixWindow() {
-    setBusy(true);
-    setMessage("");
-    try {
-      await invoke("fix_client_window");
-      setMessage("已请求修复客户端窗口（如出现 UAC 请允许）");
-    } catch (cause) {
-      setMessage(String(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <div className={styles.page}>
       <Title3>辅助工具</Title3>
@@ -277,7 +264,7 @@ export default function AuxiliaryPage() {
         </section>
 
         <section className={styles.card}>
-          <Title3>资料展示</Title3>
+          <Title3>个人资料</Title3>
           <Field label="头像图标 ID">
             <Input
               type="number"
@@ -345,7 +332,7 @@ export default function AuxiliaryPage() {
         </section>
 
         <section className={styles.card}>
-          <Title3>资料段位展示</Title3>
+          <Title3>段位展示</Title3>
           <Field label="队列">
             <Dropdown
               value={
@@ -455,28 +442,13 @@ export default function AuxiliaryPage() {
           <Title3>客户端</Title3>
           <Button
             size="small"
-            disabled={busy}
-            onClick={() => void fixWindow()}
-          >
-            修复客户端窗口
-          </Button>
-          <Button
-            size="small"
             disabled={!enabled || busy}
             onClick={() => void write("/lol-gameflow/v1/reconnect", "POST")}
           >
             强制重连
           </Button>
-          <Button
-            size="small"
-            appearance="outline"
-            disabled={!enabled || busy}
-            onClick={() => void write("/riotclient/kill-and-restart-ux", "POST")}
-          >
-            重启客户端
-          </Button>
           <Caption1 className={styles.muted}>
-            重启会断开当前会话；应用会自动重连。以上操作会立即写入客户端。
+            重连会立即写入客户端；修复窗口与重启客户端已移到左侧边栏底部。
           </Caption1>
         </section>
       </div>

@@ -561,7 +561,7 @@ export default function SearchPage({
             <div className={styles.column}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <Subtitle1 style={{ flex: 1 }}>
-                  最近战绩（{visible.length}）
+                  对局记录（{visible.length}）
                 </Subtitle1>
                 <Dropdown
                   aria-label="筛选队列"
@@ -680,7 +680,7 @@ export default function SearchPage({
                   </div>
                   {Boolean(tftSelected.augments?.length) && (
                     <Caption1 className={styles.muted}>
-                      强化：
+                      强化符文：
                       {(tftSelected.augments ?? [])
                         .map((augment) => augment.name || augment.id)
                         .join(" / ")}

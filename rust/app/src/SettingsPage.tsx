@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -17,8 +17,6 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { DismissRegular } from "@fluentui/react-icons";
-import { AssetImage } from "./AssetImage";
-import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type {
@@ -52,7 +50,7 @@ const useStyles = makeStyles({
     gap: "10px",
     minWidth: 0,
     width: "100%",
-    maxWidth: "560px",
+    maxWidth: "368px",
     breakInside: "avoid",
     marginBottom: "12px",
     verticalAlign: "top",
@@ -99,32 +97,8 @@ const TIER_OPTIONS = [
 ];
 const POSITION_OPTIONS = ["TOP", "JUNGLE", "MID", "ADC", "SUPPORT"];
 
-const BAN_KEYS = {
-  general: "autoBanChampion",
-  TOP: "autoBanChampionTop",
-  JUNGLE: "autoBanChampionJug",
-  MID: "autoBanChampionMid",
-  ADC: "autoBanChampionBot",
-  SUPPORT: "autoBanChampionSup",
-} as const;
 
-const SELECT_KEYS = {
-  general: "autoSelectChampion",
-  TOP: "autoSelectChampionTop",
-  JUNGLE: "autoSelectChampionJug",
-  MID: "autoSelectChampionMid",
-  ADC: "autoSelectChampionBot",
-  SUPPORT: "autoSelectChampionSup",
-} as const;
 
-const SPELL_KEYS = {
-  general: "autoSetSummonerSpell",
-  TOP: "autoSetSummonerSpellTop",
-  JUNGLE: "autoSetSummonerSpellJug",
-  MID: "autoSetSummonerSpellMid",
-  ADC: "autoSetSummonerSpellBot",
-  SUPPORT: "autoSetSummonerSpellSup",
-} as const;
 
 const QUEUE_FILTER_ROWS: [string, string][] = [
   ["420", "单双排"],
@@ -148,13 +122,6 @@ export default function SettingsPage({
   const [draft, setDraft] = useState<AppConfig>(config);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [aramUpdating, setAramUpdating] = useState(false);
-  const [aramMessage, setAramMessage] = useState("");
-  const [listPosition, setListPosition] = useState("general");
-  const [champions, setChampions] = useState<Record<string, string>>({});
-  const [spells, setSpells] = useState<
-    Record<string, { name?: string; iconPath?: string }>
-  >({});
   const [queues, setQueues] = useState<Record<string, { name?: string }>>({});
   const [clients, setClients] = useState<
     { pid: number; port?: number; server?: string }[]
@@ -215,16 +182,8 @@ export default function SettingsPage({
   }
 
   useEffect(() => {
-    void invoke<{
-      champions?: Record<string, string>;
-      spells?: Record<string, { name?: string; iconPath?: string }>;
-      queues?: Record<string, { name?: string }>;
-    }>("catalog_get")
-      .then((catalog) => {
-        setChampions(catalog.champions ?? {});
-        setSpells(catalog.spells ?? {});
-        setQueues(catalog.queues ?? {});
-      })
+    void invoke<{ queues?: Record<string, { name?: string }> }>("catalog_get")
+      .then((catalog) => setQueues(catalog.queues ?? {}))
       .catch(() => undefined);
   }, []);
 
@@ -274,52 +233,6 @@ export default function SettingsPage({
       ...current,
       theme: { ...current.theme, [key]: value },
     }));
-
-  const banKey = BAN_KEYS[listPosition as keyof typeof BAN_KEYS];
-  const selectKey = SELECT_KEYS[listPosition as keyof typeof SELECT_KEYS];
-  const spellKey = SPELL_KEYS[listPosition as keyof typeof SPELL_KEYS];
-  const banList = (draft.functions[banKey] as number[] | undefined) ?? [];
-  const selectList =
-    (draft.functions[selectKey] as number[] | undefined) ?? [];
-  const spellList = (draft.functions[spellKey] as number[] | undefined) ?? [
-    54, 54,
-  ];
-  const [picker, setPicker] = useState<{
-    title: string;
-    items: PickerItem[];
-    selected: number[];
-    multiple: boolean;
-    onConfirm: (ids: number[]) => void;
-  } | null>(null);
-
-  const championItems = useMemo<PickerItem[]>(
-    () =>
-      Object.entries(champions).map(([id, name]) => ({
-        id: Number(id),
-        name,
-        icon: `/lol-game-data/assets/v1/champion-icons/${id}.png`,
-      })),
-    [champions],
-  );
-
-  const spellItems = useMemo<PickerItem[]>(
-    () =>
-      Object.entries(spells)
-        .map(([id, spell]) => ({
-          id: Number(id),
-          name: spell.name || `技能 ${id}`,
-          icon: spell.iconPath,
-        }))
-        .filter((spell) => spell.id !== 54 && spell.name !== "占位"),
-    [spells],
-  );
-
-  function updateList(key: string, values: number[]) {
-    setDraft((current) => ({
-      ...current,
-      functions: { ...current.functions, [key]: values },
-    }));
-  }
 
   const queueFilter =
     (draft.functions.queueFilter as Record<string, number[]> | undefined) ?? {};
@@ -394,49 +307,6 @@ export default function SettingsPage({
     );
   }
 
-  function renderChampionList(listKey: string, values: number[]) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {values.map((id) => (
-            <Badge key={id} appearance="tint" color="informative">
-              {champions[String(id)] ?? `#${id}`}
-              <Button
-                size="small"
-                appearance="transparent"
-                icon={<DismissRegular />}
-                aria-label="移除"
-                onClick={() =>
-                  updateList(
-                    listKey,
-                    values.filter((value) => value !== id),
-                  )
-                }
-              />
-            </Badge>
-          ))}
-          {values.length === 0 && (
-            <Caption1 className={styles.muted}>尚未选择英雄</Caption1>
-          )}
-        </div>
-        <Button
-          appearance="secondary"
-          onClick={() =>
-            setPicker({
-              title: "选择英雄",
-              items: championItems,
-              selected: values,
-              multiple: true,
-              onConfirm: (ids) => updateList(listKey, ids),
-            })
-          }
-        >
-          选择英雄…
-        </Button>
-      </div>
-    );
-  }
-
   async function checkUpdates() {
     setCheckingUpdate(true);
     setUpdateStatus("");
@@ -466,29 +336,6 @@ export default function SettingsPage({
       setUpdateStatus(`安装失败：${cause}`);
     } finally {
       setInstallingUpdate(false);
-    }
-  }
-
-  async function refreshAram() {
-    setAramUpdating(true);
-    setAramMessage("");
-    try {
-      const result = await invoke<{
-        updated: boolean;
-        version: string;
-        warning?: string | null;
-      }>("aram_update", { force: true });
-      setAramMessage(
-        result.updated
-          ? `ARAM 数据已更新到 ${result.version}`
-          : `ARAM 数据已是最新（${result.version}）${
-              result.warning ? `：${result.warning}` : ""
-            }`,
-      );
-    } catch (cause) {
-      setAramMessage(String(cause));
-    } finally {
-      setAramUpdating(false);
     }
   }
 
@@ -634,233 +481,6 @@ export default function SettingsPage({
           </Field>
           <Caption1 className={styles.muted}>
             代理修改在下次启动时应用到已有连接。
-          </Caption1>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>游戏功能</Title3>
-          <Field label="职业页战绩场次">
-            <Input
-              type="number"
-              value={String(draft.functions.careerGamesNumber)}
-              onChange={(_, data) =>
-                updateFunctions(
-                  "careerGamesNumber",
-                  Math.max(1, Math.min(20, Number(data.value) || 20)),
-                )
-              }
-            />
-          </Field>
-          <Field label="自动接受对局">
-            <Switch
-              checked={draft.functions.enableAutoAcceptMatching}
-              onChange={(_, data) =>
-                updateFunctions("enableAutoAcceptMatching", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动接受延迟（秒）">
-            <Input
-              type="number"
-              value={String(draft.functions.autoAcceptMatchingDelay)}
-              onChange={(_, data) =>
-                updateFunctions(
-                  "autoAcceptMatchingDelay",
-                  Number(data.value) || 0,
-                )
-              }
-            />
-          </Field>
-          <Field label="自动重连">
-            <Switch
-              checked={draft.functions.enableAutoReconnect}
-              onChange={(_, data) =>
-                updateFunctions("enableAutoReconnect", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动接受交换">
-            <Switch
-              checked={draft.functions.autoAcceptCeilSwap}
-              onChange={(_, data) =>
-                updateFunctions("autoAcceptCeilSwap", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动接受英雄交易">
-            <Switch
-              checked={draft.functions.autoAcceptChampTrade}
-              onChange={(_, data) =>
-                updateFunctions("autoAcceptChampTrade", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动禁用英雄">
-            <Switch
-              checked={draft.functions.enableAutoBanChampion}
-              onChange={(_, data) =>
-                updateFunctions("enableAutoBanChampion", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动选择英雄">
-            <Switch
-              checked={draft.functions.enableAutoSelectChampion}
-              onChange={(_, data) =>
-                updateFunctions("enableAutoSelectChampion", data.checked)
-              }
-            />
-          </Field>
-          <Field label="自动设置召唤师技能">
-            <Switch
-              checked={draft.functions.enableAutoSetSpells}
-              onChange={(_, data) =>
-                updateFunctions("enableAutoSetSpells", data.checked)
-              }
-            />
-          </Field>
-          <Field label="选人时显示 OP.GG">
-            <Switch
-              checked={draft.functions.autoShowOpgg}
-              onChange={(_, data) =>
-                updateFunctions("autoShowOpgg", data.checked)
-              }
-            />
-          </Field>
-          <Field label="OP.GG 窗口置顶">
-            <Switch
-              checked={draft.functions.enableOpggOnTop}
-              onChange={(_, data) =>
-                updateFunctions("enableOpggOnTop", data.checked)
-              }
-            />
-          </Field>
-          <Field label="对局信息显示段位">
-            <Switch
-              checked={draft.functions.showTierInGameInfo}
-              onChange={(_, data) =>
-                updateFunctions("showTierInGameInfo", data.checked)
-              }
-            />
-          </Field>
-          <Field label="对局信息过滤">
-            <Switch
-              checked={draft.functions.gameInfoFilter}
-              onChange={(_, data) =>
-                updateFunctions("gameInfoFilter", data.checked)
-              }
-            />
-          </Field>
-          <Field label="ARAM 数据自动更新">
-            <Switch
-              checked={draft.functions.aramDataAutoUpdate}
-              onChange={(_, data) =>
-                updateFunctions("aramDataAutoUpdate", data.checked)
-              }
-            />
-          </Field>
-          <Field label="ARAM 数据源地址">
-            <Input
-              value={draft.functions.aramDataFeedUrl}
-              placeholder="https://gitee.com/.../aram-manifest.json"
-              onChange={(_, data) =>
-                updateFunctions("aramDataFeedUrl", data.value)
-              }
-            />
-          </Field>
-          <Button
-            size="small"
-            disabled={aramUpdating}
-            onClick={() => void refreshAram()}
-          >
-            {aramUpdating ? "更新中…" : "立即检查 ARAM 更新"}
-          </Button>
-          {aramMessage && (
-            <Caption1 className={styles.muted}>{aramMessage}</Caption1>
-          )}
-          <Caption1 className={styles.muted}>
-            技能组合与自动接受延迟沿用迁移后的配置。
-          </Caption1>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>自动禁用 / 选人名单</Title3>
-          <Field label="分路">
-            <Dropdown
-              value={
-                listPosition === "general"
-                  ? "通用"
-                  : listPosition === "TOP"
-                    ? "上单"
-                    : listPosition === "JUNGLE"
-                      ? "打野"
-                      : listPosition === "MID"
-                        ? "中单"
-                        : listPosition === "ADC"
-                          ? "下路"
-                          : "辅助"
-              }
-              selectedOptions={[listPosition]}
-              onOptionSelect={(_, data) =>
-                setListPosition(data.optionValue ?? "general")
-              }
-            >
-              <Option value="general">通用</Option>
-              <Option value="TOP">上单</Option>
-              <Option value="JUNGLE">打野</Option>
-              <Option value="MID">中单</Option>
-              <Option value="ADC">下路</Option>
-              <Option value="SUPPORT">辅助</Option>
-            </Dropdown>
-          </Field>
-          <Caption1 className={styles.muted}>自动禁用名单</Caption1>
-          {renderChampionList(banKey, banList)}
-          <Caption1 className={styles.muted}>自动选择名单</Caption1>
-          {renderChampionList(selectKey, selectList)}
-          <Caption1 className={styles.muted}>自动召唤师技能（D / F）</Caption1>
-          <div style={{ display: "flex", gap: 8 }}>
-            {[0, 1].map((index) => {
-              const spellId = spellList[index] ?? 54;
-              const spell = spells[String(spellId)];
-              const empty =
-                spellId === 54 || !spell?.name || spell.name === "占位";
-              return (
-                <Button
-                  key={`spell-${index}`}
-                  appearance="secondary"
-                  icon={
-                    <AssetImage
-                      path={spell?.iconPath}
-                      size={20}
-                      radius={4}
-                      title={empty ? "未选择" : spell?.name}
-                    />
-                  }
-                  onClick={() =>
-                    setPicker({
-                      title: `选择召唤师技能（${index === 0 ? "D" : "F"}）`,
-                      items: spellItems,
-                      selected: [spellId],
-                      multiple: false,
-                      onConfirm: (ids) => {
-                        if (!ids.length) return;
-                        const next = [
-                          spellList[0] ?? 54,
-                          spellList[1] ?? 54,
-                        ];
-                        next[index] = ids[0];
-                        updateList(spellKey, next);
-                      },
-                    })
-                  }
-                >
-                  {empty ? "未选择" : spell?.name}
-                </Button>
-              );
-            })}
-          </div>
-          <Caption1 className={styles.muted}>
-            按分路保存；需同时开启上方“自动禁用英雄 / 自动选择英雄”。实际写操作仍受策略开关约束。
           </Caption1>
         </section>
 
@@ -1090,17 +710,6 @@ export default function SettingsPage({
           </Field>
         </section>
       </div>
-      {picker && (
-        <IconPickerDialog
-          open
-          title={picker.title}
-          items={picker.items}
-          selected={picker.selected}
-          multiple={picker.multiple}
-          onConfirm={picker.onConfirm}
-          onClose={() => setPicker(null)}
-        />
-      )}
     </div>
   );
 }

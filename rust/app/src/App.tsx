@@ -24,8 +24,11 @@ import {
 import {
   ChevronLeftRegular,
   ChevronRightRegular,
+  ArrowClockwiseRegular,
   DismissRegular,
   GamesRegular,
+  HomeRegular,
+  OptionsRegular,
   PersonRegular,
   SearchRegular,
   SettingsRegular,
@@ -35,6 +38,8 @@ import {
   WrenchRegular,
 } from "@fluentui/react-icons";
 import SearchPage, { type SearchRequest } from "./SearchPage";
+import HomePage from "./HomePage";
+import GameFunctionsPage from "./GameFunctionsPage";
 import GameInfoPage from "./GameInfoPage";
 import TftPage from "./TftPage";
 import OpggPage from "./OpggPage";
@@ -226,6 +231,18 @@ const useStyles = makeStyles({
     alignSelf: "flex-start",
     minWidth: "32px",
   },
+  actionsRow: {
+    display: "flex",
+    gap: "6px",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingBottom: "4px",
+  },
+  actionRound: {
+    minWidth: "34px",
+    width: "34px",
+    height: "34px",
+  },
   championIcon: {
     width: "40px",
     height: "40px",
@@ -294,7 +311,7 @@ export default function App() {
   const [icons, setIcons] = useState<Record<number, string>>({});
   const [profileIcon, setProfileIcon] = useState("");
   const [error, setError] = useState("");
-  const [tab, setTab] = useState("career");
+  const [tab, setTab] = useState("home");
   const [connecting, setConnecting] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(
@@ -477,7 +494,7 @@ export default function App() {
         <div
           className={styles.body}
           style={{
-            gridTemplateColumns: collapsed ? "64px 1fr" : "200px 1fr",
+            gridTemplateColumns: collapsed ? "64px 1fr" : "128px 1fr",
           }}
         >
           <nav className={styles.sidebar}>
@@ -495,6 +512,14 @@ export default function App() {
               selectedValue={tab}
               onTabSelect={(_, data) => setTab(String(data.value))}
             >
+              <Tab
+                value="home"
+                icon={<HomeRegular />}
+                title="首页"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "首页"}
+              </Tab>
               <Tab
                 value="career"
                 icon={<PersonRegular />}
@@ -518,6 +543,14 @@ export default function App() {
                 style={collapsed ? { minWidth: 0 } : undefined}
               >
                 {!collapsed && "对局信息"}
+              </Tab>
+              <Tab
+                value="functions"
+                icon={<OptionsRegular />}
+                title="游戏功能"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "游戏功能"}
               </Tab>
               <Tab
                 value="opgg"
@@ -553,14 +586,57 @@ export default function App() {
               </Tab>
             </TabList>
             <div className={styles.navSpacer} />
+            <div
+              className={styles.actionsRow}
+              style={{ flexDirection: collapsed ? "column" : "row" }}
+            >
+              <Button
+                appearance="outline"
+                shape="circular"
+                className={styles.actionRound}
+                icon={<WrenchRegular />}
+                title="修复客户端窗口"
+                aria-label="修复客户端窗口"
+                onClick={() => {
+                  void invoke("fix_client_window").catch((cause) =>
+                    setError(String(cause)),
+                  );
+                }}
+              />
+              <Button
+                appearance="outline"
+                shape="circular"
+                className={styles.actionRound}
+                icon={<ArrowClockwiseRegular />}
+                title="重启客户端"
+                aria-label="重启客户端"
+                onClick={() => {
+                  void invoke("write_lcu", {
+                    operationId: crypto.randomUUID(),
+                    method: "POST",
+                    path: "/riotclient/kill-and-restart-ux",
+                    data: null,
+                  }).catch((cause) => setError(String(cause)));
+                }}
+              />
+            </div>
             {!collapsed && (
               <>
                 <Divider />
-                <Caption1 className={styles.muted}>
-                  {status?.connected
-                    ? `PID ${status.pid} · epoch ${status.epoch} · WS ${status.websocketReceived}`
-                    : "等待英雄联盟客户端"}
-                </Caption1>
+                {status?.connected ? (
+                  <>
+                    <Caption1 className={styles.muted}>
+                      PID {status.pid} · 事件 {status.websocketReceived}
+                    </Caption1>
+                    <Caption1 className={styles.muted}>
+                      epoch {status.epoch} · 重连 {status.websocketReconnects}
+                    </Caption1>
+                  </>
+                ) : (
+                  <Caption1 className={styles.muted}>
+                    等待英雄联盟客户端
+                  </Caption1>
+                )}
               </>
             )}
           </nav>
@@ -571,6 +647,8 @@ export default function App() {
                 <MessageBarBody>{error}</MessageBarBody>
               </MessageBar>
             )}
+
+            {tab === "home" && <HomePage />}
 
             {tab === "career" && (
               <>
@@ -646,7 +724,7 @@ export default function App() {
                     </section>
 
                     <Subtitle1 className={styles.sectionTitle}>
-                      最近战绩
+                      对局记录
                     </Subtitle1>
                     <div className={styles.matchList}>
                       {career.matches.map((match) => (
@@ -739,6 +817,10 @@ export default function App() {
               />
             )}
 
+            {tab === "functions" && config && (
+              <GameFunctionsPage config={config} onSaved={setConfig} />
+            )}
+
             {tab === "opgg" && (
               <OpggPage connected={Boolean(status?.connected)} />
             )}
@@ -749,7 +831,9 @@ export default function App() {
 
             {tab === "auxiliary" && <AuxiliaryPage />}
 
-            {tab !== "career" &&
+            {tab !== "home" &&
+              tab !== "career" &&
+              tab !== "functions" &&
               tab !== "search" &&
               tab !== "gameinfo" &&
               tab !== "tft" &&
