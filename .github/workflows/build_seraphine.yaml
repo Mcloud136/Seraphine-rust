@@ -34,9 +34,31 @@ jobs:
           python -m compileall -q app main.py
 
       - name: Python contract tests
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest discover -s tests/contract -v
+        run: |
+          python - <<'PY'
+          import sys
+          import unittest
+
+
+          class AnnotatingResult(unittest.TextTestResult):
+              def addFailure(self, test, err):
+                  print(f"::error title=contract-failure::{test.id()}")
+                  super().addFailure(test, err)
+
+              def addError(self, test, err):
+                  print(f"::error title=contract-error::{test.id()}")
+                  super().addError(test, err)
+
+
+          suite = unittest.TestLoader().discover("tests/contract")
+          result = unittest.TextTestRunner(
+              verbosity=2, resultclass=AnnotatingResult
+          ).run(suite)
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY
 
       - name: Package Windows bundle
         run: .\make.ps1
