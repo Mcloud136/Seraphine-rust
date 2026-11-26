@@ -51,6 +51,13 @@
 - 共享库：`rust/crates/seraphine-core/src/`
 - 截图与输入辅助：`rust/app/scripts/`
 
+## 七天观察（待启动）
+
+- 目的：在退役 Python/sidecar 前，用真实使用覆盖补丁日、客户端重启、长时间挂机与连续多局。
+- 起点：待用户确认后使用签名 2.0.0 作为日常版本并记录本地日期（当前未开始）。
+- 汇总：`python rust/app/scripts/observe.py --since <YYYY-MM-DDTHH:MM>` 输出连接/断线/写失败/ARAM 更新/每日告警数；`--json` 供留档。
+- 通过标准：无 panic；重连正常；无自动写异常（接受/ban/pick/技能/完成）；AMM feed 失败不污染缓存；空闲内存不持续增长；真实发布后更新链路过一次。
+
 ## 已知风险
 
 - 最近回归：`cargo test --release --workspace` 全绿；app 2 通过；Python 93 通过（1 跳过）。sidecar 内存断言按 release 口径（release 9.22 MiB 通过；debug 11.3 MB 超 10 MiB 为已知构建差异）。PresentMon 真机 A/B 已完成（同局两对、各 60 s）：p99 6.16/6.42 ms（应用运行）vs 6.36/6.34 ms（停止），0 次 >50 ms；采集脚本 `bench_game_frames.py`/`analyze_game_frames.py` 已修复 ETW 残留会话与 UTF-16 CSV。
