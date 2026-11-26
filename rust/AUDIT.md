@@ -24,7 +24,7 @@
 
 1. 自动接受对局：2026-11-27 18:39:11 真机匹配自动接受成功（`auto accepted match`，未手动点击）。
 2. 目标机（Intel 250KF）复测 PresentMon；本机 i9-14900HX 已完成两对同局 A/B（见 PERF）。
-3. GitHub Releases 真实发布：工作流已入库且 CI 构建包全绿；发布需配置 `TAURI_SIGNING_PRIVATE_KEY` 并推 tag（用户 2026-11-27 决定暂缓）。
+3. GitHub Releases 真实发布：工作流已入库且 CI 构建包全绿，并支持 dispatch dry-run（仅产出签名包与运行制品，不创建 Release）；全新克隆复验签名构建+静默安装/卸载通过。发布需配置 `TAURI_SIGNING_PRIVATE_KEY` 并推 tag（用户 2026-11-27 决定暂缓）。
 4. 窗口修复工具：2026-11-27 真机验证，客户端窗口 1920×1080 @(16,69) → 1280×720 @(557,323)，UAC 自升生效。
 5. i18n 英/葡（用户选择中文优先）。
 6. Python 版退役与 sidecar 删除（需完成上述灰度与七天观察）。
