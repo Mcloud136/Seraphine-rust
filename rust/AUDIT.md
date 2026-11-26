@@ -8,7 +8,7 @@
 
 | 交付项 | 证据 |
 | --- | --- |
-| Tauri 2 + React/Fluent UI 外壳、托盘、单实例、Mica、窗口尺寸记忆 | 真机启动；1000×700 保存/恢复 |
+| Tauri 2 + React/Fluent UI 外壳、托盘、单实例、Mica、窗口尺寸记忆 | 真机启动；1000×700 保存/恢复；重复启动被 single-instance 拦截（仅 1 个进程、无第二次 LCU 连接） |
 | Rust 业务核心：配置迁移、LCU 会话/事件、目录、职业页、搜索、对局信息、TFT、OP.GG、ARAM、实时对局 | `rust/crates/seraphine-core`；真机逐页截图验证 |
 | 设置页：常规/网络/功能/OP.GG/外观/名单/技能/队列筛选/客户端/更新 | 保存写回 `config.json`；窄窗响应式修复 |
 | LCU 写操作：Allowlist、operation id、请求哈希、读回确认、30 天守卫 | `PUT /lol-chat/v1/me` 真机成功；`write-guards.json` 落盘 |
