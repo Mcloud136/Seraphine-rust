@@ -20,23 +20,32 @@ jobs:
         with:
           python-version: '3.13'
           cache: 'pip'
-      - name: Pack and verify Seraphine
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller==6.22.3
-          python -m compileall -q app main.py
-          $env:QT_QPA_PLATFORM = "offscreen"
-          python -m unittest discover -s tests/contract -v
-          .\make.ps1
-          python -m tests.bench.package_smoke .\dist\Seraphine
-          echo "SUCCESS=true" >> $GITHUB_ENV
-
       - name: Verify Rust workspace
         run: |
           cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
           cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
           cargo test --release --manifest-path .\rust\Cargo.toml --workspace
           cargo clippy --manifest-path .\rust\Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Install build tools
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller==6.22.3
+          python -m compileall -q app main.py
+
+      - name: Python contract tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests/contract -v
+
+      - name: Package Windows bundle
+        run: .\make.ps1
+
+      - name: Package smoke
+        run: |
+          python -m tests.bench.package_smoke .\dist\Seraphine
+          echo "SUCCESS=true" >> $GITHUB_ENV
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         if: ${{ env.SUCCESS }} == 'true'
