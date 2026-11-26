@@ -102,6 +102,21 @@ interface GameTeam {
   bans?: { championId: number }[];
 }
 
+interface TftGameSummary {
+  gameId: number;
+  placement: number;
+  level: number;
+  setNumber: number;
+  duration: number;
+  gameCreation: number;
+  units?: {
+    championId: number;
+    championName: string;
+    tier: number;
+  }[];
+  augments?: { id: number; name?: string }[];
+}
+
 interface GameDetail {
   gameId: number;
   gameCreation: number;
@@ -211,6 +226,23 @@ const useStyles = makeStyles({
     display: "flex",
     gap: "2px",
   },
+  tftUnits: {
+    display: "flex",
+    gap: "4px",
+    flexWrap: "wrap",
+  },
+  playerLink: {
+    minWidth: 0,
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    color: "inherit",
+    font: "inherit",
+    textAlign: "left",
+    cursor: "pointer",
+    display: "grid",
+    gap: "1px",
+  },
   muted: {
     color: tokens.colorNeutralForeground3,
   },
@@ -230,7 +262,19 @@ function matchesFilter(match: MatchSummary, filter: string): boolean {
   return filter === "all" || String(match.queueId) === filter;
 }
 
-export default function SearchPage({ connected }: { connected: boolean }) {
+export interface SearchRequest {
+  query: string;
+  gameId?: number;
+  nonce: number;
+}
+
+export default function SearchPage({
+  connected,
+  request,
+}: {
+  connected: boolean;
+  request?: SearchRequest | null;
+}) {
   const styles = useStyles();
   const [query, setQuery] = useState("");
   const [player, setPlayer] = useState<PlayerPayload | null>(null);
@@ -242,6 +286,7 @@ export default function SearchPage({ connected }: { connected: boolean }) {
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<GameDetail | null>(null);
+  const [tftSelected, setTftSelected] = useState<TftGameSummary | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [history, setHistory] = useState("");
 
@@ -293,24 +338,52 @@ export default function SearchPage({ connected }: { connected: boolean }) {
     }
   }
 
-  async function search() {
-    if (!connected || !query.trim() || loading) return;
+  async function runSearch(text: string, gameId?: number) {
+    if (!connected || !text || loading) return;
     setLoading(true);
     setError("");
     setSelected(null);
+    setTftSelected(null);
     setExtra([]);
     setHasMore(true);
     setFilter("all");
     void loadCatalog();
     try {
       const result = await invoke<PlayerPayload>("player_overview", {
-        query: query.trim(),
+        query: text,
       });
       setPlayer(result);
-      setHistory(query.trim());
+      setHistory(text);
       void invoke("config_patch", {
-        patch: { other: { searchHistory: query.trim() } },
+        patch: { other: { searchHistory: text } },
       }).catch(() => undefined);
+      if (gameId) {
+        setDetailLoading(true);
+        try {
+          setSelected(
+            await invoke<GameDetail>("game_detail", { gameId }),
+          );
+        } catch (cause) {
+          try {
+            const tft = await invoke<{ games?: TftGameSummary[] }>(
+              "tft_recent",
+              { count: 40 },
+            );
+            const game = (tft.games ?? []).find(
+              (entry) => entry.gameId === gameId,
+            );
+            if (game) {
+              setTftSelected(game);
+            } else {
+              setError(String(cause));
+            }
+          } catch {
+            setError(String(cause));
+          }
+        } finally {
+          setDetailLoading(false);
+        }
+      }
     } catch (cause) {
       setPlayer(null);
       setError(
@@ -321,6 +394,38 @@ export default function SearchPage({ connected }: { connected: boolean }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function search() {
+    const text = query.trim();
+    if (text) void runSearch(text);
+  }
+
+  const requestNonce = request?.nonce;
+  useEffect(() => {
+    if (!request || !request.query) return;
+    setQuery(request.query);
+    void runSearch(request.query, request.gameId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestNonce]);
+
+  function focusPlayer(
+    player: {
+      puuid?: string;
+      gameName?: string;
+      tagLine?: string;
+      summonerName?: string;
+    },
+    gameId?: number,
+  ) {
+    const target =
+      player.puuid ||
+      (player.gameName
+        ? `${player.gameName}${player.tagLine ? `#${player.tagLine}` : ""}`
+        : player.summonerName);
+    if (!target) return;
+    setQuery(target);
+    void runSearch(target, gameId ?? selected?.gameId);
   }
 
   async function loadMore() {
@@ -539,11 +644,63 @@ export default function SearchPage({ connected }: { connected: boolean }) {
 
             <div className={styles.column}>
               {detailLoading && <Spinner label="读取对局详情…" />}
-              {!detailLoading && !selected && (
+              {!detailLoading && !selected && !tftSelected && (
                 <div className={styles.detail}>
                   <Caption1 className={styles.muted}>
                     点击左侧对局查看双方阵容、装备与符文。
                   </Caption1>
+                </div>
+              )}
+              {tftSelected && !detailLoading && (
+                <div className={styles.detail}>
+                  <div className={styles.detailHeader}>
+                    <div>
+                      <Subtitle1>云顶之弈</Subtitle1>
+                      <Caption1 className={styles.muted}>
+                        {formatTime(tftSelected.gameCreation)} ·{" "}
+                        {formatDuration(tftSelected.duration)}
+                      </Caption1>
+                    </div>
+                    <Button
+                      appearance="subtle"
+                      size="small"
+                      onClick={() => setTftSelected(null)}
+                    >
+                      收起
+                    </Button>
+                  </div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <Badge appearance="tint" color={tftSelected.placement <= 4 ? "success" : "danger"}>
+                      第 {tftSelected.placement} 名
+                    </Badge>
+                    <Caption1>等级 {tftSelected.level}</Caption1>
+                    <Caption1 className={styles.muted}>
+                      Set {tftSelected.setNumber}
+                    </Caption1>
+                  </div>
+                  {Boolean(tftSelected.augments?.length) && (
+                    <Caption1 className={styles.muted}>
+                      强化：
+                      {(tftSelected.augments ?? [])
+                        .map((augment) => augment.name || augment.id)
+                        .join(" / ")}
+                    </Caption1>
+                  )}
+                  <div className={styles.tftUnits}>
+                    {(tftSelected.units ?? []).map((unit, index) => (
+                      <AssetImage
+                        key={`${tftSelected.gameId}-${index}`}
+                        path={
+                          unit.championId > 0
+                            ? championIcon(unit.championId)
+                            : undefined
+                        }
+                        size={30}
+                        radius={4}
+                        title={`${unit.championName} · ${unit.tier} 星`}
+                      />
+                    ))}
+                  </div>
                 </div>
               )}
               {selected && !detailLoading && (
@@ -554,6 +711,9 @@ export default function SearchPage({ connected }: { connected: boolean }) {
                   queueName={queueName(selected)}
                   styles={styles}
                   onClose={() => setSelected(null)}
+                  onPlayerClick={(player) =>
+                    focusPlayer(player, selected.gameId)
+                  }
                 />
               )}
             </div>
@@ -573,6 +733,7 @@ function GameDetailView({
   queueName,
   styles,
   onClose,
+  onPlayerClick,
 }: {
   detail: GameDetail;
   catalog: CatalogData;
@@ -580,6 +741,12 @@ function GameDetailView({
   queueName: string;
   styles: Styles;
   onClose: () => void;
+  onPlayerClick: (player: {
+    puuid?: string;
+    gameName?: string;
+    tagLine?: string;
+    summonerName?: string;
+  }) => void;
 }) {
   const teams = detail.teams ?? [];
   const participants = detail.participants ?? [];
@@ -666,7 +833,12 @@ function GameDetailView({
                     <AssetImage path={spell2} size={18} radius={3} />
                   </div>
                   <AssetImage path={perk} size={18} radius={9} />
-                  <div style={{ minWidth: 0 }}>
+                  <button
+                    type="button"
+                    className={styles.playerLink}
+                    title={`查看 ${name} 的战绩`}
+                    onClick={() => player && onPlayerClick(player)}
+                  >
                     <Text weight={own ? "semibold" : "regular"} truncate>
                       {name}
                     </Text>
@@ -675,7 +847,7 @@ function GameDetailView({
                       {stats.kills ?? 0}/{stats.deaths ?? 0}/
                       {stats.assists ?? 0} · {cs} CS
                     </Caption1>
-                  </div>
+                  </button>
                   <div className={styles.items}>
                     {items.map((itemId, index) => (
                       <AssetImage

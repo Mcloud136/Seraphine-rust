@@ -66,6 +66,11 @@ const useStyles = makeStyles({
     display: "flex",
     flexDirection: "column",
     gap: "6px",
+    cursor: "pointer",
+    width: "100%",
+    textAlign: "left",
+    color: "inherit",
+    font: "inherit",
   },
   cardTop: {
     display: "flex",
@@ -109,7 +114,13 @@ function tierColor(tier: number): string {
   }
 }
 
-export default function TftPage({ connected }: { connected: boolean }) {
+export default function TftPage({
+  connected,
+  onOpenMatch,
+}: {
+  connected: boolean;
+  onOpenMatch: (gameId: number, puuid?: string) => void;
+}) {
   const styles = useStyles();
   const [data, setData] = useState<TftPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -183,7 +194,13 @@ export default function TftPage({ connected }: { connected: boolean }) {
 
       <div className={styles.list}>
         {games.map((game) => (
-          <div className={styles.card} key={game.gameId}>
+          <button
+            type="button"
+            className={styles.card}
+            key={game.gameId}
+            title="在搜索中查看这一局"
+            onClick={() => onOpenMatch(game.gameId, data?.puuid)}
+          >
             <div className={styles.cardTop}>
               <Badge
                 appearance="tint"
@@ -222,7 +239,7 @@ export default function TftPage({ connected }: { connected: boolean }) {
                 </div>
               ))}
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>

@@ -22,6 +22,8 @@ import {
   webLightTheme,
 } from "@fluentui/react-components";
 import {
+  ChevronLeftRegular,
+  ChevronRightRegular,
   DismissRegular,
   GamesRegular,
   PersonRegular,
@@ -32,7 +34,7 @@ import {
   TrophyRegular,
   WrenchRegular,
 } from "@fluentui/react-icons";
-import SearchPage from "./SearchPage";
+import SearchPage, { type SearchRequest } from "./SearchPage";
 import GameInfoPage from "./GameInfoPage";
 import TftPage from "./TftPage";
 import OpggPage from "./OpggPage";
@@ -211,6 +213,18 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground2,
     borderLeftWidth: "3px",
     borderLeftStyle: "solid",
+    cursor: "pointer",
+    width: "100%",
+    textAlign: "left",
+    color: "inherit",
+    font: "inherit",
+    borderTop: "none",
+    borderRight: "none",
+    borderBottom: "none",
+  },
+  toggleButton: {
+    alignSelf: "flex-start",
+    minWidth: "32px",
   },
   championIcon: {
     width: "40px",
@@ -282,6 +296,18 @@ export default function App() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState("career");
   const [connecting, setConnecting] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(
+    null,
+  );
+
+  const openSearch = useCallback(
+    (request: { query: string; gameId?: number }) => {
+      setSearchRequest({ ...request, nonce: Date.now() });
+      setTab("search");
+    },
+    [],
+  );
 
   const dark = config?.theme.themeMode?.toLowerCase() === "dark";
 
@@ -388,6 +414,11 @@ export default function App() {
     career?.summoner.gameName ??
     career?.summoner.displayName ??
     "未获取召唤师";
+  const ownQuery =
+    career?.summoner.puuid ||
+    (career
+      ? `${summonerName}${career.summoner.tagLine ? `#${career.summoner.tagLine}` : ""}`
+      : "");
 
   return (
     <FluentProvider
@@ -443,42 +474,95 @@ export default function App() {
           </div>
         </div>
 
-        <div className={styles.body}>
+        <div
+          className={styles.body}
+          style={{
+            gridTemplateColumns: collapsed ? "64px 1fr" : "200px 1fr",
+          }}
+        >
           <nav className={styles.sidebar}>
+            <Button
+              appearance="subtle"
+              className={styles.toggleButton}
+              icon={
+                collapsed ? <ChevronRightRegular /> : <ChevronLeftRegular />
+              }
+              aria-label={collapsed ? "展开导航" : "收起导航"}
+              onClick={() => setCollapsed((value) => !value)}
+            />
             <TabList
               vertical
               selectedValue={tab}
               onTabSelect={(_, data) => setTab(String(data.value))}
             >
-              <Tab value="career" icon={<PersonRegular />}>
-                职业
+              <Tab
+                value="career"
+                icon={<PersonRegular />}
+                title="个人信息"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "个人信息"}
               </Tab>
-              <Tab value="search" icon={<SearchRegular />}>
-                搜索
+              <Tab
+                value="search"
+                icon={<SearchRegular />}
+                title="搜索信息"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "搜索信息"}
               </Tab>
-              <Tab value="gameinfo" icon={<GamesRegular />}>
-                对局信息
+              <Tab
+                value="gameinfo"
+                icon={<GamesRegular />}
+                title="对局信息"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "对局信息"}
               </Tab>
-              <Tab value="opgg" icon={<TrophyRegular />}>
-                OP.GG
+              <Tab
+                value="opgg"
+                icon={<TrophyRegular />}
+                title="OP.GG"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "OP.GG"}
               </Tab>
-              <Tab value="tft" icon={<GamesRegular />}>
-                TFT
+              <Tab
+                value="tft"
+                icon={<GamesRegular />}
+                title="云顶之弈"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "云顶之弈"}
               </Tab>
-              <Tab value="auxiliary" icon={<WrenchRegular />}>
-                辅助工具
+              <Tab
+                value="auxiliary"
+                icon={<WrenchRegular />}
+                title="辅助工具"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "辅助工具"}
               </Tab>
-              <Tab value="settings" icon={<SettingsRegular />}>
-                设置
+              <Tab
+                value="settings"
+                icon={<SettingsRegular />}
+                title="设置"
+                style={collapsed ? { minWidth: 0 } : undefined}
+              >
+                {!collapsed && "设置"}
               </Tab>
             </TabList>
             <div className={styles.navSpacer} />
-            <Divider />
-            <Caption1 className={styles.muted}>
-              {status?.connected
-                ? `PID ${status.pid} · epoch ${status.epoch} · WS ${status.websocketReceived}`
-                : "等待英雄联盟客户端"}
-            </Caption1>
+            {!collapsed && (
+              <>
+                <Divider />
+                <Caption1 className={styles.muted}>
+                  {status?.connected
+                    ? `PID ${status.pid} · epoch ${status.epoch} · WS ${status.websocketReceived}`
+                    : "等待英雄联盟客户端"}
+                </Caption1>
+              </>
+            )}
           </nav>
 
           <main className={styles.content}>
@@ -566,9 +650,18 @@ export default function App() {
                     </Subtitle1>
                     <div className={styles.matchList}>
                       {career.matches.map((match) => (
-                        <div
+                        <button
+                          type="button"
                           key={match.gameId}
                           className={styles.matchRow}
+                          title="在搜索中查看这一局"
+                          disabled={!ownQuery}
+                          onClick={() =>
+                            openSearch({
+                              query: ownQuery,
+                              gameId: match.gameId,
+                            })
+                          }
                           style={{
                             borderLeftColor: match.win
                               ? tokens.colorPaletteGreenBorder1
@@ -609,7 +702,7 @@ export default function App() {
                               {match.kills} / {match.deaths} / {match.assists}
                             </div>
                           </div>
-                        </div>
+                        </button>
                       ))}
                       {career.matches.length === 0 && (
                         <Caption1 className={styles.muted}>
@@ -623,15 +716,27 @@ export default function App() {
             )}
 
             {tab === "search" && (
-              <SearchPage connected={Boolean(status?.connected)} />
+              <SearchPage
+                connected={Boolean(status?.connected)}
+                request={searchRequest}
+              />
             )}
 
             {tab === "gameinfo" && (
-              <GameInfoPage connected={Boolean(status?.connected)} />
+              <GameInfoPage
+                connected={Boolean(status?.connected)}
+                onOpenSearch={openSearch}
+              />
             )}
 
             {tab === "tft" && (
-              <TftPage connected={Boolean(status?.connected)} />
+              <TftPage
+                connected={Boolean(status?.connected)}
+                onOpenMatch={(gameId, puuid) => {
+                  const query = puuid || ownQuery;
+                  if (query) openSearch({ query, gameId });
+                }}
+              />
             )}
 
             {tab === "opgg" && (

@@ -162,6 +162,22 @@ const useStyles = makeStyles({
   info: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   rankLine: { display: "flex", gap: "12px", flexWrap: "wrap" },
   recentIcons: { display: "flex", gap: "3px", flexWrap: "wrap" },
+  nameLink: {
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    color: "inherit",
+    font: "inherit",
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  recentGame: {
+    padding: 0,
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    display: "inline-flex",
+  },
   stats: { textAlign: "right", display: "flex", flexDirection: "column", gap: "4px" },
   muted: { color: tokens.colorNeutralForeground3 },
   bp: {
@@ -453,7 +469,13 @@ function championIcon(championId: number): string | undefined {
     : undefined;
 }
 
-export default function GameInfoPage({ connected }: { connected: boolean }) {
+export default function GameInfoPage({
+  connected,
+  onOpenSearch,
+}: {
+  connected: boolean;
+  onOpenSearch: (request: { query: string; gameId?: number }) => void;
+}) {
   const styles = useStyles();
   const [side, setSide] = useState("ally");
   const [ally, setAlly] = useState<GameInfoPayload | null>(null);
@@ -618,10 +640,23 @@ export default function GameInfoPage({ connected }: { connected: boolean }) {
               />
               <div className={styles.info}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <Text weight="semibold">
-                    {player.name}
-                    {player.tagLine ? `#${player.tagLine}` : ""}
-                  </Text>
+                  <button
+                    type="button"
+                    className={styles.nameLink}
+                    title="在搜索中查看该玩家"
+                    onClick={() =>
+                      onOpenSearch({
+                        query:
+                          player.puuid ||
+                          `${player.name}${player.tagLine ? `#${player.tagLine}` : ""}`,
+                      })
+                    }
+                  >
+                    <Text weight="semibold">
+                      {player.name}
+                      {player.tagLine ? `#${player.tagLine}` : ""}
+                    </Text>
+                  </button>
                   <Caption1 className={styles.muted}>
                     Lv.{player.level}
                   </Caption1>
@@ -657,11 +692,21 @@ export default function GameInfoPage({ connected }: { connected: boolean }) {
                 </div>
                 <div className={styles.recentIcons}>
                   {games.map((game) => (
-                    <div
+                    <button
+                      type="button"
                       key={game.gameId}
+                      className={styles.recentGame}
                       title={`${game.championName} ${game.kills}/${game.deaths}/${game.assists} ${
                         game.win ? "胜" : "负"
-                      }`}
+                      } · 在搜索中查看`}
+                      onClick={() =>
+                        onOpenSearch({
+                          query:
+                            player.puuid ||
+                            `${player.name}${player.tagLine ? `#${player.tagLine}` : ""}`,
+                          gameId: game.gameId,
+                        })
+                      }
                       style={{
                         borderBottom: `2px solid ${
                           game.win
@@ -675,7 +720,7 @@ export default function GameInfoPage({ connected }: { connected: boolean }) {
                         size={24}
                         radius={4}
                       />
-                    </div>
+                    </button>
                   ))}
                 </div>
                 {buff?.description && (
