@@ -19,7 +19,11 @@ export interface PickerItem {
   id: number;
   name: string;
   icon?: string;
+  keywords?: string[];
 }
+
+const normalize = (text: string) =>
+  text.toLowerCase().replace(/[^0-9a-z一-鿿]/g, "");
 
 const useStyles = makeStyles({
   surface: { maxWidth: "780px", width: "92vw" },
@@ -95,14 +99,16 @@ export function IconPickerDialog({
   }, [open]);
 
   const filtered = useMemo(() => {
-    const text = query.trim();
+    const text = normalize(query.trim());
     return items
-      .filter(
-        (item) =>
-          !text ||
-          item.name.includes(text) ||
-          String(item.id).includes(text),
-      )
+      .filter((item) => {
+        if (!text) return true;
+        if (String(item.id).includes(text)) return true;
+        if (normalize(item.name).includes(text)) return true;
+        return (item.keywords ?? []).some((keyword) =>
+          keyword.includes(text),
+        );
+      })
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
   }, [items, query]);
 

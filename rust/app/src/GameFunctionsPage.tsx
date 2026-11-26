@@ -18,6 +18,7 @@ import {
 import { DismissRegular } from "@fluentui/react-icons";
 import { AssetImage } from "./AssetImage";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
+import { CHAMPION_KEYWORDS } from "./championAliases";
 import type { AppConfig, FunctionConfig } from "./config";
 
 const useStyles = makeStyles({
@@ -134,6 +135,7 @@ export default function GameFunctionsPage({
         id: Number(id),
         name,
         icon: `/lol-game-data/assets/v1/champion-icons/${id}.png`,
+        keywords: CHAMPION_KEYWORDS[Number(id)] ?? [],
       })),
     [champions],
   );

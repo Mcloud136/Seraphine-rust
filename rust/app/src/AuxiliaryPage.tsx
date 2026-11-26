@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
+import { CHAMPION_KEYWORDS } from "./championAliases";
 import {
   Button,
   Caption1,
@@ -146,6 +147,7 @@ export default function AuxiliaryPage() {
         id: Number(id),
         name,
         icon: `/lol-game-data/assets/v1/champion-icons/${id}.png`,
+        keywords: CHAMPION_KEYWORDS[Number(id)] ?? [],
       })),
     [champions],
   );
