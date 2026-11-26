@@ -51,12 +51,10 @@
 - 共享库：`rust/crates/seraphine-core/src/`
 - 截图与输入辅助：`rust/app/scripts/`
 
-## 七天观察（待启动）
+## 观察（用户已取消七天门禁）
 
-- 目的：在退役 Python/sidecar 前，用真实使用覆盖补丁日、客户端重启、长时间挂机与连续多局。
-- 起点：待用户确认后使用签名 2.0.0 作为日常版本并记录本地日期（当前未开始）。
-- 汇总：`python rust/app/scripts/observe.py --since <YYYY-MM-DDTHH:MM>` 输出连接/断线/写失败/ARAM 更新/每日告警数；`--json` 供留档。
-- 通过标准：无 panic；重连正常；无自动写异常（接受/ban/pick/技能/完成）；AMM feed 失败不污染缓存；空闲内存不持续增长；真实发布后更新链路过一次。
+- 用户 2026-11-27 决定：不做七天审计，以逐模式功能自测通过为准；Python/sidecar 在自测确认后退役。
+- 工具仍保留：`python rust/app/scripts/observe.py --since <YYYY-MM-DDTHH:MM>` 可按需汇总连接/断线/写失败/ARAM 更新/每日告警数。
 
 ## 已知风险
 
