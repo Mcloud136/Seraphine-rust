@@ -64,6 +64,8 @@ jobs:
         run: .\make.ps1
 
       - name: Package smoke
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           python -m tests.bench.package_smoke .\dist\Seraphine
           echo "SUCCESS=true" >> $GITHUB_ENV
