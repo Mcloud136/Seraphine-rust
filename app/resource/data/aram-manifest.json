@@ -1,11 +1,11 @@
 {
-  "schema": 1,
-  "version": "16.23.1",
-  "gameVersion": "16.23",
-  "generatedAt": "2026-11-26T10:26:42Z",
-  "file": "AramBuff.json",
-  "size": 21500,
-  "sha256": "b1a36255d541059b78a2e69843067921e8e10f6f087dc5a9899366e74d536856",
   "champions": 132,
-  "source": "wiki.leagueoflegends.com Module:ChampionData/data (bootstrap)"
+  "file": "AramBuff.json",
+  "gameVersion": "16.23",
+  "generatedAt": "2026-11-26T20:55:47Z",
+  "schema": 1,
+  "sha256": "32ca13626fcd39ceb421a6c6dd8f6345ad494955fbc4edbc69162fd1a3b21bdf",
+  "size": 21488,
+  "source": "wiki.leagueoflegends.com Module:ChampionData/data",
+  "version": "16.23.1"
 }
