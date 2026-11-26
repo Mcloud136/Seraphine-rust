@@ -96,6 +96,11 @@ export default function AuxiliaryPage() {
   const [chosenChampion, setChosenChampion] = useState("");
   const [chosenSkin, setChosenSkin] = useState("");
   const [skinDialog, setSkinDialog] = useState<SkinItem[] | null>(null);
+  const [skinAugments, setSkinAugments] = useState<
+    Record<number, { id: string; signature?: boolean }[]>
+  >({});
+  const [chosenAugment, setChosenAugment] = useState<string | undefined>();
+  const [signatureOn, setSignatureOn] = useState(false);
   const [picker, setPicker] = useState<{
     title: string;
     items: PickerItem[];
@@ -157,9 +162,26 @@ export default function AuxiliaryPage() {
   async function loadSkins(champion: string) {
     try {
       const data = await invoke<{
-        skins?: Record<string, { skinId?: number; splashPath?: string }>;
+        skins?: Record<
+          string,
+          {
+            skinId?: number;
+            splashPath?: string;
+            augments?: { id: string; signature?: boolean }[];
+          }
+        >;
       }>("champion_skins", { champion });
       const map = data.skins ?? {};
+      setSkinAugments(
+        Object.fromEntries(
+          Object.values(map).map((skin) => [
+            Number(skin.skinId ?? 0),
+            skin.augments ?? [],
+          ]),
+        ),
+      );
+      setChosenAugment(undefined);
+      setSignatureOn(false);
       setChosenChampion(champion);
       setChosenSkin("");
       setBackgroundSkin("");
@@ -345,16 +367,53 @@ export default function AuxiliaryPage() {
                 : "选择英雄与皮肤…"}
             </Button>
           </Field>
+          {(() => {
+            const augments = skinAugments[Number(backgroundSkin)] ?? [];
+            const signature = augments.find((augment) => augment.signature);
+            if (!signature) return null;
+            const base = augments.find((augment) => !augment.signature);
+            return (
+              <Field label="签名版">
+                <Switch
+                  checked={signatureOn}
+                  onChange={(_, data) => {
+                    setSignatureOn(data.checked);
+                    setChosenAugment(
+                      data.checked ? signature.id : base?.id,
+                    );
+                  }}
+                />
+              </Field>
+            );
+          })()}
           <Button
             size="small"
             disabled={!enabled || busy || !backgroundSkin}
-            onClick={() =>
-              void write(
-                "/lol-summoner/v1/current-summoner/summoner-profile",
-                "POST",
-                { key: "backgroundSkinId", value: Number(backgroundSkin) },
-              )
-            }
+            onClick={() => {
+              void (async () => {
+                setBusy(true);
+                setMessage("");
+                try {
+                  await write(
+                    "/lol-summoner/v1/current-summoner/summoner-profile",
+                    "POST",
+                    { key: "backgroundSkinId", value: Number(backgroundSkin) },
+                  );
+                  if (chosenAugment) {
+                    await write(
+                      "/lol-summoner/v1/current-summoner/summoner-profile",
+                      "POST",
+                      {
+                        key: "backgroundSkinAugments",
+                        value: chosenAugment,
+                      },
+                    );
+                  }
+                } finally {
+                  setBusy(false);
+                }
+              })();
+            }}
           >
             应用背景皮肤
           </Button>
@@ -526,6 +585,10 @@ export default function AuxiliaryPage() {
             if (!skin) return;
             setChosenSkin(skin.name);
             setBackgroundSkin(String(id));
+            const augments = skinAugments[id] ?? [];
+            const base = augments.find((augment) => !augment.signature);
+            setSignatureOn(false);
+            setChosenAugment(base?.id);
           }}
           onClose={() => setSkinDialog(null)}
         />

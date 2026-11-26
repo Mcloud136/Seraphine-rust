@@ -159,6 +159,30 @@ impl CatalogBuilder {
             .champion_skins
             .entry(champion_name.to_string())
             .or_insert_with(|| json!({ "id": champion_id, "skins": {} }));
+        let augments = skin
+            .get("skinAugments")
+            .and_then(|value| value.get("augments"))
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|augment| {
+                        let content_id = augment.get("contentId")?.clone();
+                        let signature = augment
+                            .get("overlays")
+                            .and_then(Value::as_array)
+                            .is_some_and(|overlays| {
+                                overlays.iter().any(|overlay| {
+                                    overlay
+                                        .get("centeredLCOverlayPath")
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|path| path.contains("signature"))
+                                })
+                            });
+                        Some(json!({ "id": content_id, "signature": signature }))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         if let Some(skin_map) = entry.get_mut("skins").and_then(Value::as_object_mut) {
             skin_map.insert(
                 name.to_string(),
@@ -166,6 +190,7 @@ impl CatalogBuilder {
                     "skinId": id,
                     "splashPath": skin.get("splashPath").cloned().unwrap_or(Value::Null),
                     "uncenteredSplashPath": skin.get("uncenteredSplashPath").cloned().unwrap_or(Value::Null),
+                    "augments": augments,
                 }),
             );
         }
