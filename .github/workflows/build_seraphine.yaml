@@ -25,15 +25,18 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller==6.22.3
           python -m compileall -q app main.py
-          cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
           $env:QT_QPA_PLATFORM = "offscreen"
           python -m unittest discover -s tests/contract -v
-          cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
-          cargo test --release --manifest-path .\rust\Cargo.toml --workspace
-          cargo clippy --manifest-path .\rust\Cargo.toml --workspace --all-targets -- -D warnings
           .\make.ps1
           python -m tests.bench.package_smoke .\dist\Seraphine
           echo "SUCCESS=true" >> $GITHUB_ENV
+
+      - name: Verify Rust workspace
+        run: |
+          cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
+          cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
+          cargo test --release --manifest-path .\rust\Cargo.toml --workspace
+          cargo clippy --manifest-path .\rust\Cargo.toml --workspace --all-targets -- -D warnings
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         if: ${{ env.SUCCESS }} == 'true'
