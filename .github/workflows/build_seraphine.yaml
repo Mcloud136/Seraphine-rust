@@ -61,7 +61,7 @@ jobs:
           PY
 
       - name: Package Windows bundle
-        run: .\make.ps1
+        run: .\make.ps1 -dbg
 
       - name: Package smoke
         shell: bash
@@ -83,6 +83,9 @@ jobs:
               raise
           PY
           echo "SUCCESS=true" >> $GITHUB_ENV
+
+      - name: Archive bundle
+        run: 7z a Seraphine.7z .\dist\Seraphine\* -r
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
