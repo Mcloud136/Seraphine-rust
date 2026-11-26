@@ -10,6 +10,8 @@ on:
       - scripts/update_aram_data.py
       - scripts/publish_github_assets.py
       - .github/workflows/update_aram_data.yaml
+      - rust/tools/aram-data/**
+      - rust/Cargo.lock
 
 permissions:
   contents: write
@@ -30,8 +32,14 @@ jobs:
         with:
           python-version: "3.13"
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
       - name: Generate ARAM data snapshot
-        run: python scripts/update_aram_data.py --output-dir app/resource/data
+        run: cargo run --release --manifest-path rust/Cargo.toml -p aram-data -- --output-dir app/resource/data
 
       - name: Commit snapshot
         run: |

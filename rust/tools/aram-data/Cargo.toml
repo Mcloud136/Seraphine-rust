@@ -1,0 +1,13 @@
+[package]
+name = "aram-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
