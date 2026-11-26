@@ -57,7 +57,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.value }}"
-          $tag = "${{ github.ref_name }}"
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dry-run" }
           $installer = "rust/app/src-tauri/target/release/bundle/nsis/Seraphine Rust_${version}_x64-setup.exe"
           if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
           $encoded = "Seraphine%20Rust_${version}_x64-setup.exe"
@@ -72,7 +72,17 @@ jobs:
             --pub-date $timestamp `
             --output latest.json
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: seraphine-rust-${{ steps.version.outputs.value }}
+          path: |
+            rust/app/src-tauri/target/release/bundle/nsis/*.exe
+            rust/app/src-tauri/target/release/bundle/nsis/*.sig
+            latest.json
+
       - name: Publish release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
