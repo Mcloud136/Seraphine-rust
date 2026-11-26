@@ -95,6 +95,18 @@ const TIER_OPTIONS = [
   "challenger",
 ];
 const POSITION_OPTIONS = ["TOP", "JUNGLE", "MID", "ADC", "SUPPORT"];
+const OPGG_TIER_LABELS: Record<string, string> = {
+  all: "全部段位",
+  ibsg: "铁铜银金",
+  gold_plus: "黄金+",
+  platinum_plus: "铂金+",
+  emerald_plus: "翡翠+",
+  diamond_plus: "钻石+",
+  master: "大师",
+  master_plus: "大师+",
+  grandmaster: "宗师+",
+  challenger: "王者",
+};
 
 
 
@@ -685,15 +697,22 @@ export default function SettingsPage({
           </Field>
           <Field label="段位">
             <Dropdown
-              value={draft.functions.opggTier}
+              value={
+                OPGG_TIER_LABELS[draft.functions.opggTier] ??
+                draft.functions.opggTier
+              }
               selectedOptions={[draft.functions.opggTier]}
               onOptionSelect={(_, data) =>
                 updateFunctions("opggTier", data.optionValue ?? "emerald_plus")
               }
             >
               {TIER_OPTIONS.map((item) => (
-                <Option key={item} value={item}>
-                  {item}
+                <Option
+                  key={item}
+                  value={item}
+                  text={OPGG_TIER_LABELS[item] ?? item}
+                >
+                  {OPGG_TIER_LABELS[item] ?? item}
                 </Option>
               ))}
             </Dropdown>

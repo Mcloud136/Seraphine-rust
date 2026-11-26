@@ -141,6 +141,14 @@ impl Catalog {
     }
 
     /// Subset the web view needs for names and icons.
+    pub fn champion_skins(&self, champion: &str) -> Value {
+        self.snapshot
+            .get("championSkins")
+            .and_then(|skins| skins.get(champion))
+            .cloned()
+            .unwrap_or_else(|| json!({}))
+    }
+
     pub fn web_snapshot(&self) -> Value {
         let section = |key: &str| self.snapshot.get(key).cloned().unwrap_or(json!({}));
         json!({

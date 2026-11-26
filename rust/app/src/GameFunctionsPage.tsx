@@ -301,15 +301,6 @@ export default function GameFunctionsPage({
               onChange={(_, data) => update("prententBan", data.checked)}
             />
           </Field>
-          <Field label="自动禁用延迟（秒）">
-            <Input
-              type="number"
-              value={String(draft.autoBanDelay)}
-              onChange={(_, data) =>
-                update("autoBanDelay", Number(data.value) || 0)
-              }
-            />
-          </Field>
         </section>
 
         <section className={styles.card}>
@@ -334,6 +325,15 @@ export default function GameFunctionsPage({
               checked={draft.enableAutoBanChampion}
               onChange={(_, data) =>
                 update("enableAutoBanChampion", data.checked)
+              }
+            />
+          </Field>
+          <Field label="自动禁用延迟（秒）">
+            <Input
+              type="number"
+              value={String(draft.autoBanDelay)}
+              onChange={(_, data) =>
+                update("autoBanDelay", Number(data.value) || 0)
               }
             />
           </Field>

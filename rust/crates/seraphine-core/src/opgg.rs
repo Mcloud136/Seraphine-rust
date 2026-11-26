@@ -19,15 +19,7 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(60);
 
 pub const REGIONS: [&str; 2] = ["kr", "global"];
-pub const MODES: [&str; 7] = [
-    "ranked",
-    "aram",
-    "arena",
-    "urf",
-    "nexus_blitz",
-    "classic",
-    "aram_mayhem_classic",
-];
+pub const MODES: [&str; 6] = ["ranked", "aram", "arena", "urf", "nexus_blitz", "classic"];
 pub const TIERS: [&str; 10] = [
     "all",
     "ibsg",

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import {
   Button,
   Caption1,
@@ -89,7 +90,16 @@ export default function AuxiliaryPage() {
   const [message, setMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [availability, setAvailability] = useState("online");
-  const [profileIcon, setProfileIcon] = useState("");
+  const [champions, setChampions] = useState<Record<string, string>>({});
+  const [chosenChampion, setChosenChampion] = useState("");
+  const [chosenSkin, setChosenSkin] = useState("");
+  const [picker, setPicker] = useState<{
+    title: string;
+    items: PickerItem[];
+    selected: number[];
+    multiple: boolean;
+    onConfirm: (ids: number[]) => void;
+  } | null>(null);
   const [backgroundSkin, setBackgroundSkin] = useState("");
   const [spectateName, setSpectateName] = useState("");
   const [displayQueue, setDisplayQueue] = useState("RANKED_SOLO_5x5");
@@ -121,6 +131,53 @@ export default function AuxiliaryPage() {
       setMessage(String(cause));
     } finally {
       setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void invoke<{ champions?: Record<string, string> }>("catalog_get")
+      .then((catalog) => setChampions(catalog.champions ?? {}))
+      .catch(() => undefined);
+  }, []);
+
+  const championItems = useMemo<PickerItem[]>(
+    () =>
+      Object.entries(champions).map(([id, name]) => ({
+        id: Number(id),
+        name,
+        icon: `/lol-game-data/assets/v1/champion-icons/${id}.png`,
+      })),
+    [champions],
+  );
+
+  async function loadSkins(champion: string) {
+    try {
+      const data = await invoke<{
+        skins?: Record<string, { skinId?: number; splashPath?: string }>;
+      }>("champion_skins", { champion });
+      const map = data.skins ?? {};
+      setChosenChampion(champion);
+      setChosenSkin("");
+      setBackgroundSkin("");
+      const items = Object.entries(map).map(([name, skin]) => ({
+        id: Number(skin.skinId ?? 0),
+        name,
+        icon: skin.splashPath,
+      }));
+      setPicker({
+        title: `选择皮肤（${champion}）`,
+        items,
+        selected: [],
+        multiple: false,
+        onConfirm: (ids) => {
+          const skin = items.find((item) => item.id === ids[0]);
+          if (!skin) return;
+          setChosenSkin(skin.name);
+          setBackgroundSkin(String(skin.id));
+        },
+      });
+    } catch (cause) {
+      setMessage(String(cause));
     }
   }
 
@@ -273,37 +330,26 @@ export default function AuxiliaryPage() {
             }
           >
             应用可用性
-          </Button>
-        </section>
-
-        <section className={styles.card}>
-          <Title3>个人资料</Title3>
-          <Field label="头像图标 ID">
-            <Input
-              type="number"
-              value={profileIcon}
-              onChange={(_, data) => setProfileIcon(data.value)}
-              placeholder="例如 4568"
-            />
-          </Field>
-          <Button
-            size="small"
-            disabled={!enabled || busy || !profileIcon}
-            onClick={() =>
-              void write("/lol-summoner/v1/current-summoner/icon", "PUT", {
-                profileIconId: Number(profileIcon),
-              })
-            }
-          >
-            设置头像
-          </Button>
-          <Field label="背景皮肤 ID">
-            <Input
-              type="number"
-              value={backgroundSkin}
-              onChange={(_, data) => setBackgroundSkin(data.value)}
-              placeholder="例如 518000"
-            />
+          </Button>          <Field label="背景皮肤">
+            <Button
+              appearance="secondary"
+              onClick={() =>
+                setPicker({
+                  title: "选择英雄",
+                  items: championItems,
+                  selected: [],
+                  multiple: false,
+                  onConfirm: (ids) => {
+                    const name = champions[String(ids[0])];
+                    if (name) void loadSkins(name);
+                  },
+                })
+              }
+            >
+              {chosenChampion
+                ? `${chosenChampion}${chosenSkin ? ` · ${chosenSkin}` : ""}`
+                : "选择英雄与皮肤…"}
+            </Button>
           </Field>
           <Button
             size="small"
@@ -312,15 +358,15 @@ export default function AuxiliaryPage() {
               void write(
                 "/lol-summoner/v1/current-summoner/summoner-profile",
                 "POST",
-                {
-                  key: "backgroundSkinId",
-                  value: Number(backgroundSkin),
-                },
+                { key: "backgroundSkinId", value: Number(backgroundSkin) },
               )
             }
           >
-            设置背景
+            应用背景皮肤
           </Button>
+          <Caption1 className={styles.muted}>
+            先搜索英雄，再选择该英雄的皮肤；应用后客户端个人资料背景会更新。
+          </Caption1>
         </section>
 
         <section className={styles.card}>
@@ -465,6 +511,17 @@ export default function AuxiliaryPage() {
           </Caption1>
         </section>
       </div>
+      {picker && (
+        <IconPickerDialog
+          open
+          title={picker.title}
+          items={picker.items}
+          selected={picker.selected}
+          multiple={picker.multiple}
+          onConfirm={picker.onConfirm}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </div>
   );
 }

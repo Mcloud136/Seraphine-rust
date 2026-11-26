@@ -105,7 +105,6 @@ const MODES = [
   { value: "urf", label: "无限火力" },
   { value: "nexus_blitz", label: "极限闪击" },
   { value: "classic", label: "匹配" },
-  { value: "aram_mayhem_classic", label: "海克斯大乱斗" },
 ];
 
 const TIERS = [
