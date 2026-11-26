@@ -124,7 +124,12 @@ export default function AuxiliaryPage() {
       .catch(() => undefined);
   }, []);
 
-  async function write(path: string, method: string, data?: unknown) {
+  async function write(
+    path: string,
+    method: string,
+    data?: unknown,
+    label = "操作已完成",
+  ) {
     setBusy(true);
     setMessage("");
     try {
@@ -134,7 +139,7 @@ export default function AuxiliaryPage() {
         path,
         data: data ?? null,
       });
-      setMessage(`已完成：${method} ${path}`);
+      setMessage(label);
     } catch (cause) {
       setMessage(String(cause));
     } finally {
@@ -294,7 +299,13 @@ export default function AuxiliaryPage() {
         </MessageBar>
       )}
       {message && (
-        <MessageBar intent={message.startsWith("已完成") ? "success" : "error"}>
+        <MessageBar
+          intent={
+            /(失败|错误|无法|拒绝|不存在|超时|error|http|lcu)/i.test(message)
+              ? "error"
+              : "success"
+          }
+        >
           <MessageBarBody>{message}</MessageBarBody>
         </MessageBar>
       )}
@@ -313,9 +324,12 @@ export default function AuxiliaryPage() {
             size="small"
             disabled={!enabled || busy}
             onClick={() =>
-              void write("/lol-chat/v1/me", "PUT", {
-                statusMessage,
-              })
+              void write(
+                "/lol-chat/v1/me",
+                "PUT",
+                { statusMessage },
+                "个性签名已更新。",
+              )
             }
           >
             设置状态
@@ -342,7 +356,12 @@ export default function AuxiliaryPage() {
             size="small"
             disabled={!enabled || busy}
             onClick={() =>
-              void write("/lol-chat/v1/me", "PUT", { availability })
+              void write(
+                "/lol-chat/v1/me",
+                "PUT",
+                { availability },
+                "在线状态已更新。",
+              )
             }
           >
             应用可用性
@@ -394,21 +413,29 @@ export default function AuxiliaryPage() {
                 setBusy(true);
                 setMessage("");
                 try {
-                  await write(
-                    "/lol-summoner/v1/current-summoner/summoner-profile",
-                    "POST",
-                    { key: "backgroundSkinId", value: Number(backgroundSkin) },
-                  );
+                  await invoke("write_lcu", {
+                    operationId: crypto.randomUUID(),
+                    method: "POST",
+                    path: "/lol-summoner/v1/current-summoner/summoner-profile",
+                    data: {
+                      key: "backgroundSkinId",
+                      value: Number(backgroundSkin),
+                    },
+                  });
                   if (chosenAugment) {
-                    await write(
-                      "/lol-summoner/v1/current-summoner/summoner-profile",
-                      "POST",
-                      {
+                    await invoke("write_lcu", {
+                      operationId: crypto.randomUUID(),
+                      method: "POST",
+                      path: "/lol-summoner/v1/current-summoner/summoner-profile",
+                      data: {
                         key: "backgroundSkinAugments",
                         value: chosenAugment,
                       },
-                    );
+                    });
                   }
+                  setMessage("个人资料背景已更新。");
+                } catch (cause) {
+                  setMessage(String(cause));
                 } finally {
                   setBusy(false);
                 }
@@ -497,13 +524,18 @@ export default function AuxiliaryPage() {
             size="small"
             disabled={!enabled || busy}
             onClick={() =>
-              void write("/lol-chat/v1/me", "PUT", {
-                lol: {
-                  rankedLeagueQueue: displayQueue,
-                  rankedLeagueTier: displayTier,
-                  rankedLeagueDivision: displayDivision,
+              void write(
+                "/lol-chat/v1/me",
+                "PUT",
+                {
+                  lol: {
+                    rankedLeagueQueue: displayQueue,
+                    rankedLeagueTier: displayTier,
+                    rankedLeagueDivision: displayDivision,
+                  },
                 },
-              })
+                "段位展示已更新。",
+              )
             }
           >
             应用段位展示
@@ -555,7 +587,14 @@ export default function AuxiliaryPage() {
           <Button
             size="small"
             disabled={!enabled || busy}
-            onClick={() => void write("/lol-gameflow/v1/reconnect", "POST")}
+            onClick={() =>
+              void write(
+                "/lol-gameflow/v1/reconnect",
+                "POST",
+                undefined,
+                "已请求客户端重新连接。",
+              )
+            }
           >
             强制重连
           </Button>
