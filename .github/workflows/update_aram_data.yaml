@@ -1,0 +1,75 @@
+name: Update ARAM data
+
+on:
+  schedule:
+    # Wiki data is refreshed by editors after LoL patches (Wed/Thu/Fri).
+    - cron: "0 9 * * 3,4,5"
+  workflow_dispatch:
+  push:
+    paths:
+      - scripts/update_aram_data.py
+      - scripts/publish_github_assets.py
+      - .github/workflows/update_aram_data.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
+      GITEE_REPO: ${{ secrets.GITEE_REPO }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Generate ARAM data snapshot
+        run: python scripts/update_aram_data.py --output-dir app/resource/data
+
+      - name: Commit snapshot
+        run: |
+          if git diff --quiet -- app/resource/data; then
+            echo "ARAM data unchanged"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/resource/data
+          git commit -m "chore: update ARAM data snapshot"
+          git push
+
+      - name: Report snapshot
+        run: |
+          python - <<'EOF'
+          import json
+          with open("app/resource/data/aram-manifest.json", encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          print("version=%s champions=%s sha256=%s"
+                % (manifest["version"], manifest["champions"], manifest["sha256"]))
+          EOF
+
+      - name: Publish assets to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pip install --quiet requests
+          python scripts/publish_github_assets.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --files app/resource/data/AramBuff.json app/resource/data/aram-manifest.json
+
+      - name: Publish assets to Gitee
+        if: env.GITEE_TOKEN != '' && env.GITEE_OWNER != '' && env.GITEE_REPO != ''
+        run: |
+          pip install --quiet requests
+          python scripts/publish_gitee_assets.py \
+            --owner "$GITEE_OWNER" \
+            --repo "$GITEE_REPO" \
+            --tag aram-data-latest \
+            --files app/resource/data/AramBuff.json app/resource/data/aram-manifest.json
