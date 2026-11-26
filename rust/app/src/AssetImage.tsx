@@ -6,11 +6,15 @@ const cache = new Map<string, string>();
 export function AssetImage({
   path,
   size = 40,
+  width,
+  height,
   radius = 6,
   title,
 }: {
   path?: string;
   size?: number;
+  width?: number | string;
+  height?: number | string;
   radius?: number;
   title?: string;
 }) {
@@ -44,7 +48,12 @@ export function AssetImage({
     };
   }, [path]);
 
-  const style = { width: size, height: size, borderRadius: radius, flexShrink: 0 };
+  const style = {
+    width: width ?? size,
+    height: height ?? size,
+    borderRadius: radius,
+    flexShrink: 0,
+  };
   return url ? (
     <img
       src={url}

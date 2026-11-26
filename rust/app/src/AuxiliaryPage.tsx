@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
+import { SkinPickerDialog, type SkinItem } from "./SkinPickerDialog";
 import { CHAMPION_KEYWORDS } from "./championAliases";
 import {
   Button,
@@ -94,6 +95,7 @@ export default function AuxiliaryPage() {
   const [champions, setChampions] = useState<Record<string, string>>({});
   const [chosenChampion, setChosenChampion] = useState("");
   const [chosenSkin, setChosenSkin] = useState("");
+  const [skinDialog, setSkinDialog] = useState<SkinItem[] | null>(null);
   const [picker, setPicker] = useState<{
     title: string;
     items: PickerItem[];
@@ -161,23 +163,13 @@ export default function AuxiliaryPage() {
       setChosenChampion(champion);
       setChosenSkin("");
       setBackgroundSkin("");
-      const items = Object.entries(map).map(([name, skin]) => ({
-        id: Number(skin.skinId ?? 0),
-        name,
-        icon: skin.splashPath,
-      }));
-      setPicker({
-        title: `选择皮肤（${champion}）`,
-        items,
-        selected: [],
-        multiple: false,
-        onConfirm: (ids) => {
-          const skin = items.find((item) => item.id === ids[0]);
-          if (!skin) return;
-          setChosenSkin(skin.name);
-          setBackgroundSkin(String(skin.id));
-        },
-      });
+      setSkinDialog(
+        Object.entries(map).map(([name, skin]) => ({
+          id: Number(skin.skinId ?? 0),
+          name,
+          splash: skin.splashPath,
+        })),
+      );
     } catch (cause) {
       setMessage(String(cause));
     }
@@ -522,6 +514,20 @@ export default function AuxiliaryPage() {
           multiple={picker.multiple}
           onConfirm={picker.onConfirm}
           onClose={() => setPicker(null)}
+        />
+      )}
+      {skinDialog && (
+        <SkinPickerDialog
+          open
+          title={`选择皮肤（${chosenChampion}）`}
+          skins={skinDialog}
+          onPick={(id) => {
+            const skin = skinDialog.find((item) => item.id === id);
+            if (!skin) return;
+            setChosenSkin(skin.name);
+            setBackgroundSkin(String(id));
+          }}
+          onClose={() => setSkinDialog(null)}
         />
       )}
     </div>
