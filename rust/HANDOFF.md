@@ -24,7 +24,7 @@
 - LCU 写操作（2026-11-27 起直接启用，无环境变量/产品开关）：写入经 Allowlist、operation id、请求哈希、选人读回确认与 30 天守卫（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。已实测 `PUT /lol-chat/v1/me` 成功并落盘守卫。
 - 自动化已真机通过（2026-11-27）：自动接受（18:39:11 `auto accepted match`，未手动点击）；征召自定义技能 7/6→4/14、ban 安妮（BAN_PICK 首秒两步 PATCH）、pick 艾希并锁定；`write-guards.json` 落盘。客户端会静默丢弃 PLANNING 阶段的 ban 写入，故 ban 最早在 BAN_PICK 第一秒生效；操作 id 使用每局 nonce，避免 `epoch:seq` 跨局碰撞导致“重放未写”。
 - 辅助工具页已上线在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（已实测可逆）与窗口修复（2026-11-27 真机：1920×1080 → 1280×720 居中，UAC 自升生效）。
-- 更新（2026-11-27 已发布）：GitHub Release `v2.0.0` 上线（安装包 4,356,941 B、`.sig`、`latest.json`、ARAM 数据）。更新清单固定走 `https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/latest.json`；`updater` 与 `aram-data-latest` 均为预发布，不抢占 GitHub Latest。GitHub 会把上传文件名中的空格规范化为点号，因此清单安装包 URL 为 `Seraphine.Rust_2.0.0_x64-setup.exe`（实测 302→CDN 可下载，签名与 `.sig` 一致）；安装/重启待真机验证。
+- 更新（2026-11-27 已发布）：GitHub Release `v2.0.1` 上线（安装包 4,357,657 B、`.sig`、`latest.json`、ARAM 数据），开箱直接启用 LCU 写操作（无环境变量/开关）。`v2.0.0` 保留为上一版。更新清单固定走 `https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/latest.json`；`updater` 与 `aram-data-latest` 均为预发布，不抢占 GitHub Latest。GitHub 会把上传文件名中的空格规范化为点号，因此清单安装包 URL 为 `Seraphine.Rust_2.0.1_x64-setup.exe`（实测 302→CDN 可下载，签名与 `.sig` 一致）；安装/重启待真机验证。
 - 发布清单：`rust/app/scripts/make_latest_json.py --installer … --signature … --version … --url … --pub-date …`。
 - Inno Setup 中文安装包（MIT 许可 + 中文用户协议）：`installer/seraphine-rust.iss`，输出 `installer/Output/SeraphineRust-2.0.0-setup-zh.exe`（本机 Inno Setup 7 编译；静默安装/卸载 smoke 通过，数据保留）。
 - 发布工作流：`.github/workflows/release_rust.yaml`（tag `v*` 触发；仓库 Secret `TAURI_SIGNING_PRIVATE_KEY` 已配置，密钥为空密码，无密码 Secret）。`workflow_dispatch` 仅做无发布演练：构建签名包与 `latest.json` 并上传运行制品，Release 创建步骤仅在 tag 触发时执行。
