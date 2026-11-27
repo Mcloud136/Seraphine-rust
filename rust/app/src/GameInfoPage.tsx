@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { friendlyError } from "./errors";
 import {
   Badge,
   Caption1,
@@ -529,7 +530,10 @@ export default function GameInfoPage({
           setError("");
         }
       } catch (cause) {
-        if (!disposed) setError(String(cause));
+        if (!disposed)
+          setError(
+            friendlyError(cause, "读取对局信息失败，请稍后重试。"),
+          );
       }
     }
     void load();

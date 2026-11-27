@@ -18,6 +18,7 @@ import {
 } from "@fluentui/react-components";
 import { AssetImage } from "./AssetImage";
 import { formatDuration, formatTime, rankText, winRate } from "./format";
+import { friendlyError } from "./errors";
 
 interface Summoner {
   gameName?: string;
@@ -375,10 +376,14 @@ export default function SearchPage({
             if (game) {
               setTftSelected(game);
             } else {
-              setError(String(cause));
+              setError(
+                friendlyError(cause, "读取对局详情失败，请稍后重试。"),
+              );
             }
           } catch {
-            setError(String(cause));
+            setError(
+              friendlyError(cause, "读取对局详情失败，请稍后重试。"),
+            );
           }
         } finally {
           setDetailLoading(false);
@@ -389,7 +394,7 @@ export default function SearchPage({
       setError(
         String(cause).includes("SummonerNotFound")
           ? "未找到该召唤师，请检查名称后重试。"
-          : String(cause),
+          : friendlyError(cause, "加载失败，请稍后重试。"),
       );
     } finally {
       setLoading(false);
@@ -440,7 +445,7 @@ export default function SearchPage({
       setExtra((previous) => [...previous, ...page.matches]);
       setHasMore(page.hasMore && page.matches.length > 0);
     } catch (cause) {
-      setError(String(cause));
+      setError(friendlyError(cause, "加载更多失败，请稍后重试。"));
     } finally {
       setLoadingMore(false);
     }
@@ -454,7 +459,7 @@ export default function SearchPage({
       });
       setSelected(detail);
     } catch (cause) {
-      setError(String(cause));
+      setError(friendlyError(cause, "读取对局详情失败，请稍后重试。"));
     } finally {
       setDetailLoading(false);
     }

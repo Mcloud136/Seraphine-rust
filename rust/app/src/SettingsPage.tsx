@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { friendlyError } from "./errors";
 import {
   Badge,
   Button,
@@ -313,7 +314,9 @@ export default function SettingsPage({
       await invoke("aram_update", { force: true });
       setAramMessage("已完成 ARAM 数据检查。");
     } catch (cause) {
-      setAramMessage(String(cause));
+      setAramMessage(
+        friendlyError(cause, "ARAM 数据检查失败，请稍后重试。"),
+      );
     } finally {
       setAramBusy(false);
     }
@@ -338,7 +341,7 @@ export default function SettingsPage({
       }).catch(() => undefined);
       setMessage("设置已保存");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause, "保存设置失败，请稍后重试。"));
     } finally {
       setSaving(false);
     }

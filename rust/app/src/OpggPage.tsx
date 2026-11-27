@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { friendlyError } from "./errors";
 import {
   Badge,
   Button,
@@ -282,7 +283,9 @@ export default function OpggPage({ connected }: { connected: boolean }) {
       setPayload(data);
     } catch (cause) {
       setPayload(null);
-      setError(String(cause));
+      setError(
+        friendlyError(cause, "加载 OP.GG 数据失败，请稍后重试。"),
+      );
     } finally {
       setLoading(false);
     }
@@ -315,7 +318,9 @@ export default function OpggPage({ connected }: { connected: boolean }) {
       setBuild(result);
     } catch (cause) {
       setBuild(null);
-      setBuildError(String(cause));
+      setBuildError(
+        friendlyError(cause, "获取出装数据失败，请稍后重试。"),
+      );
     } finally {
       setBuildLoading(false);
     }

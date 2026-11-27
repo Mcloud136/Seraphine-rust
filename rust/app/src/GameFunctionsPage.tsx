@@ -18,6 +18,7 @@ import {
 import { DismissRegular } from "@fluentui/react-icons";
 import { AssetImage } from "./AssetImage";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
+import { friendlyError } from "./errors";
 import { CHAMPION_KEYWORDS } from "./championAliases";
 import type { AppConfig, FunctionConfig } from "./config";
 
@@ -169,7 +170,7 @@ export default function GameFunctionsPage({
       onSaved(saved);
       setMessage("已保存游戏功能设置。");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause, "保存失败，请稍后重试。"));
     } finally {
       setSaving(false);
     }

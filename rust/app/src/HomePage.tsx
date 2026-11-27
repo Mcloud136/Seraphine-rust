@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { friendlyError } from "./errors";
 import {
   Badge,
   Button,
@@ -89,7 +90,9 @@ export default function HomePage() {
       await invoke("session_connect", { pid });
       await refresh();
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(
+        friendlyError(cause, "连接操作失败，请检查客户端后重试。"),
+      );
     } finally {
       setBusy(false);
     }
@@ -102,7 +105,9 @@ export default function HomePage() {
       await invoke("session_disconnect");
       await refresh();
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(
+        friendlyError(cause, "连接操作失败，请检查客户端后重试。"),
+      );
     } finally {
       setBusy(false);
     }

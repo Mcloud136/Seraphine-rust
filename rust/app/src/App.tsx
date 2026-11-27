@@ -41,6 +41,7 @@ import {
 import SearchPage, { type SearchRequest } from "./SearchPage";
 import HomePage from "./HomePage";
 import GameFunctionsPage from "./GameFunctionsPage";
+import { friendlyError } from "./errors";
 import GameInfoPage from "./GameInfoPage";
 import TftPage from "./TftPage";
 import OpggPage from "./OpggPage";
@@ -342,7 +343,9 @@ export default function App() {
       }
       setError("");
     } catch (cause) {
-      setError(String(cause));
+      setError(
+        friendlyError(cause, "连接或读取数据失败，请稍后重试。"),
+      );
     }
   }, []);
 
@@ -352,7 +355,9 @@ export default function App() {
       await invoke("session_connect", { pid: null });
       await refresh();
     } catch (cause) {
-      setError(String(cause));
+      setError(
+        friendlyError(cause, "连接或读取数据失败，请稍后重试。"),
+      );
     } finally {
       setConnecting(false);
     }
@@ -364,7 +369,11 @@ export default function App() {
       .then((value) => {
         if (!disposed) setConfig(value);
       })
-      .catch((cause) => setError(String(cause)));
+      .catch((cause) =>
+        setError(
+          friendlyError(cause, "读取配置失败，请稍后重试。"),
+        ),
+      );
 
     const unlisten = listen<SessionEventPayload>("session://event", (event) => {
       const payload = event.payload;
@@ -374,7 +383,12 @@ export default function App() {
         setCareer(null);
         setStatus(null);
       } else if (payload.type === "error") {
-        setError(payload.message);
+        setError(
+          friendlyError(
+            payload.message,
+            "客户端会话异常，请检查英雄联盟客户端。",
+          ),
+        );
       }
     });
 
@@ -602,7 +616,9 @@ export default function App() {
                 aria-label="修复客户端窗口"
                 onClick={() => {
                   void invoke("fix_client_window").catch((cause) =>
-                    setError(String(cause)),
+                    setError(
+                      friendlyError(cause, "操作失败，请稍后重试。"),
+                    ),
                   );
                 }}
               />
@@ -619,7 +635,11 @@ export default function App() {
                     method: "POST",
                     path: "/riotclient/kill-and-restart-ux",
                     data: null,
-                  }).catch((cause) => setError(String(cause)));
+                  }).catch((cause) =>
+                    setError(
+                      friendlyError(cause, "操作失败，请稍后重试。"),
+                    ),
+                  );
                 }}
               />
             </div>

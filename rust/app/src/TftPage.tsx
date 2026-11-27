@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { friendlyError } from "./errors";
 import {
   Badge,
   Button,
@@ -137,7 +138,9 @@ export default function TftPage({
       setData(result);
       setError("");
     } catch (cause) {
-      setError(String(cause));
+      setError(
+        friendlyError(cause, "读取云顶之弈战绩失败，请稍后重试。"),
+      );
     } finally {
       setLoading(false);
     }

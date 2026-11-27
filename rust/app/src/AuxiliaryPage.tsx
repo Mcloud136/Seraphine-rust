@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import { SkinPickerDialog, type SkinItem } from "./SkinPickerDialog";
+import { friendlyError } from "./errors";
 import { CHAMPION_KEYWORDS } from "./championAliases";
 import {
   Button,
@@ -141,7 +142,7 @@ export default function AuxiliaryPage() {
       });
       setMessage(label);
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     } finally {
       setBusy(false);
     }
@@ -198,7 +199,7 @@ export default function AuxiliaryPage() {
         })),
       );
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     }
   }
 
@@ -220,7 +221,7 @@ export default function AuxiliaryPage() {
       });
       setMessage("已移除挑战代币");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     } finally {
       setBusy(false);
     }
@@ -246,7 +247,7 @@ export default function AuxiliaryPage() {
       });
       setMessage("已移除 prestige 徽章");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     } finally {
       setBusy(false);
     }
@@ -262,7 +263,7 @@ export default function AuxiliaryPage() {
       });
       setMessage("已发起观战");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     } finally {
       setBusy(false);
     }
@@ -278,7 +279,7 @@ export default function AuxiliaryPage() {
       setLockState((current) => ({ ...current, locked: result }));
       setMessage(result ? "已锁定游戏配置" : "已解除配置锁定");
     } catch (cause) {
-      setMessage(String(cause));
+      setMessage(friendlyError(cause));
     } finally {
       setBusy(false);
     }
@@ -435,7 +436,7 @@ export default function AuxiliaryPage() {
                   }
                   setMessage("个人资料背景已更新。");
                 } catch (cause) {
-                  setMessage(String(cause));
+                  setMessage(friendlyError(cause));
                 } finally {
                   setBusy(false);
                 }

@@ -392,6 +392,11 @@ async fn write_lcu(
 }
 
 #[tauri::command]
+fn ui_log(message: String) {
+    log::warn!("ui: {message}");
+}
+
+#[tauri::command]
 async fn champion_skins(state: State<'_, AppState>, champion: String) -> Result<Value, String> {
     let catalog = state.catalog.read().await.clone();
     Ok(catalog.champion_skins(&champion))
@@ -596,6 +601,7 @@ fn main() {
             career_overview,
             catalog_get,
             champion_skins,
+            ui_log,
             player_overview,
             matches_page,
             game_detail,
