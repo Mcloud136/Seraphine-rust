@@ -11,6 +11,7 @@ Requires env GITEE_TOKEN (personal access token with repo write access).
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 API_ROOT = "https://gitee.com/api/v5"
@@ -74,18 +75,46 @@ def replace_attachments(token, owner, repo, release, files):
 
     urls = []
     for path in files:
-        with path.open("rb") as stream:
-            response = requests.post(
-                "%s/releases/%s/attach_files" % (base, release_id),
-                data={"access_token": token},
-                files={"file": (path.name, stream)},
-                timeout=120,
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                "upload %s -> HTTP %s: %s"
-                % (path.name, response.status_code, response.text[:300])
-            )
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                with path.open("rb") as stream:
+                    response = requests.post(
+                        "%s/releases/%s/attach_files" % (base, release_id),
+                        data={"access_token": token},
+                        files={"file": (path.name, stream)},
+                        timeout=300,
+                    )
+                if response.status_code < 400:
+                    last_error = None
+                    break
+                last_error = "HTTP %s: %s" % (
+                    response.status_code,
+                    response.text[:300],
+                )
+            except requests.RequestException as error:
+                last_error = str(error)
+            remaining = request(
+                "GET", "%s/releases/%s/attach_files" % (base, release_id),
+                params={"access_token": token, "per_page": 100},
+            ) or []
+            for attachment in remaining:
+                if attachment.get("name") == path.name:
+                    request(
+                        "DELETE",
+                        "%s/releases/%s/attach_files/%s"
+                        % (base, release_id, attachment["id"]),
+                        params={"access_token": token},
+                    )
+            if attempt < 3:
+                print(
+                    "upload %s attempt %s failed: %s; retrying"
+                    % (path.name, attempt, last_error),
+                    file=sys.stderr,
+                )
+                time.sleep(5 * attempt)
+        if last_error is not None:
+            raise RuntimeError("upload %s -> %s" % (path.name, last_error))
         urls.append(
             "https://gitee.com/%s/%s/releases/download/%s/%s"
             % (owner, repo, release["tag_name"], path.name)

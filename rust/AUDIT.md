@@ -18,7 +18,7 @@
 | NSIS 安装包（currentUser，独立安装目录） | 静默安装/启动/卸载 smoke；旧数据保留 |
 | 性能 | 启动中位数 62 ms vs 750 ms；主进程 WS 107.2 MB vs 262.0 MB；空闲 CPU 1.25% vs 2.73%；同局两对 PresentMon A/B：p99 6.16/6.42（运行）vs 6.36/6.34 ms（停止），0 次 >50ms |
 | 回归 | `cargo test --release --workspace` 全绿；app 2 通过；Python 98 通过（1 跳过）；GitHub `Build Seraphine`（c687ef1）全绿：Rust 校验、Python 契约、PyInstaller 打包、无头 smoke、7z 与产物上传 |
-| CI 与数据 | `Update ARAM data` 全绿并由 Rust CLI 生成（6da159f，与 Python 逐字段一致），发布 `aram-data-latest`（318 B / 21,488 B，sha256 校验）；应用侧真机热更新 16.22.1→16.23.1 通过（经代理）。Release `v2.0.1` 已发布：NSIS 安装包 4,357,657 B + `.sig` + `latest.json` + ARAM 数据，LCU 写操作开箱直接启用；`updater`（更新清单）与 `aram-data-latest` 使用固定标签并标记预发布，互不抢占 Latest |
+| CI 与数据 | `Update ARAM data` 全绿并由 Rust CLI 生成（6da159f，与 Python 逐字段一致），发布 `aram-data-latest`（318 B / 21,488 B，sha256 校验）；应用侧真机热更新 16.22.1→16.23.1 通过（经代理）。Release `v2.0.2` 已发布到 GitHub 与 Gitee：NSIS 4,356,274 B + 中文 Inno 6.1 MB + `.sig` + 清单 + ARAM；Gitee 镜像库 `wxbns/seraphine-rust` 自动同步 main/tags，更新端点 Gitee 优先、GitHub 回退；LCU 写操作开箱直接启用 |
 
 ## 未关闭的硬门禁
 
