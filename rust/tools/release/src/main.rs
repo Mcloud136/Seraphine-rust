@@ -70,7 +70,7 @@ enum Command {
         release_body: String,
         #[arg(long, default_value = "main")]
         target: String,
-        #[arg(long, required = true)]
+        #[arg(long, required = true, num_args = 1..)]
         files: Vec<PathBuf>,
     },
 }
