@@ -30,7 +30,7 @@ def request(method, url, **kwargs):
     return response.json()
 
 
-def ensure_release(session_token, owner, repo, tag):
+def ensure_release(session_token, owner, repo, tag, name, body, target):
     base = "%s/repos/%s/%s" % (API_ROOT, owner, repo)
     release = None
     try:
@@ -48,8 +48,9 @@ def ensure_release(session_token, owner, repo, tag):
         data={
             "access_token": session_token,
             "tag_name": tag,
-            "name": "ARAM data (latest)",
-            "body": "Automated ARAM balance snapshot (wiki.leagueoflegends.com, CC BY-SA 3.0).",
+            "name": name,
+            "body": body,
+            "target_commitish": target,
         },
     )
 
@@ -97,6 +98,12 @@ def main(argv=None):
     parser.add_argument("--owner", required=True)
     parser.add_argument("--repo", required=True)
     parser.add_argument("--tag", default="aram-data-latest")
+    parser.add_argument("--release-name", default="ARAM data (latest)")
+    parser.add_argument(
+        "--release-body",
+        default="Automated ARAM balance snapshot (wiki.leagueoflegends.com, CC BY-SA 3.0).",
+    )
+    parser.add_argument("--target", default="main")
     parser.add_argument("--files", nargs="+", required=True)
     args = parser.parse_args(argv)
 
@@ -111,7 +118,9 @@ def main(argv=None):
             print("missing file: %s" % path, file=sys.stderr)
             return 1
 
-    release = ensure_release(token, args.owner, args.repo, args.tag)
+    release = ensure_release(
+        token, args.owner, args.repo, args.tag, args.release_name, args.release_body, args.target
+    )
     urls = replace_attachments(token, args.owner, args.repo, release, files)
     print("Published to Gitee release %r:" % release.get("tag_name"))
     for url in urls:

@@ -9,6 +9,8 @@ use crate::paths::AppPaths;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_WORKSPACE: &str = "app";
 pub const DEFAULT_ARAM_FEED_URL: &str =
+    "https://gitee.com/wxbns/seraphine-rust/releases/download/aram-data-latest/aram-manifest.json";
+const LEGACY_ARAM_FEED_URL: &str =
     "https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -489,6 +491,9 @@ impl ConfigStore {
 fn normalize(mut config: AppConfig) -> AppConfig {
     config.schema_version = SCHEMA_VERSION;
     config.general.backend_mode = "rust".into();
+    if config.functions.aram_data_feed_url == LEGACY_ARAM_FEED_URL {
+        config.functions.aram_data_feed_url = DEFAULT_ARAM_FEED_URL.into();
+    }
     config
 }
 
@@ -956,6 +961,24 @@ mod tests {
         assert_eq!(
             updated.personalization.dpi_scale,
             AppConfig::default().personalization.dpi_scale
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_github_feed_to_gitee() {
+        let mut config = AppConfig::default();
+        config.functions.aram_data_feed_url = LEGACY_ARAM_FEED_URL.into();
+        let normalized = normalize(config);
+        assert_eq!(
+            normalized.functions.aram_data_feed_url,
+            DEFAULT_ARAM_FEED_URL
+        );
+
+        let mut custom = AppConfig::default();
+        custom.functions.aram_data_feed_url = "https://example.com/manifest.json".into();
+        assert_eq!(
+            normalize(custom).functions.aram_data_feed_url,
+            "https://example.com/manifest.json"
         );
     }
 }

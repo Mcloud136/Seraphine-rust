@@ -1,0 +1,34 @@
+name: Mirror to Gitee
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-gitee
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_REMOTE: https://wxbns:${{ secrets.GITEE_TOKEN }}@gitee.com/wxbns/seraphine-rust.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push main and tags to Gitee
+        if: env.GITEE_TOKEN != ''
+        run: |
+          git fetch --tags --force origin
+          git push "$GITEE_REMOTE" refs/remotes/origin/main:refs/heads/main
+          git push "$GITEE_REMOTE" --tags

@@ -24,10 +24,11 @@
 - LCU 写操作（2026-11-27 起直接启用，无环境变量/产品开关）：写入经 Allowlist、operation id、请求哈希、选人读回确认与 30 天守卫（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。已实测 `PUT /lol-chat/v1/me` 成功并落盘守卫。
 - 自动化已真机通过（2026-11-27）：自动接受（18:39:11 `auto accepted match`，未手动点击）；征召自定义技能 7/6→4/14、ban 安妮（BAN_PICK 首秒两步 PATCH）、pick 艾希并锁定；`write-guards.json` 落盘。客户端会静默丢弃 PLANNING 阶段的 ban 写入，故 ban 最早在 BAN_PICK 第一秒生效；操作 id 使用每局 nonce，避免 `epoch:seq` 跨局碰撞导致“重放未写”。
 - 辅助工具页已上线在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（已实测可逆）与窗口修复（2026-11-27 真机：1920×1080 → 1280×720 居中，UAC 自升生效）。
+- Gitee 镜像与分发（2026-11-27）：公开仓库 `https://gitee.com/wxbns/seraphine-rust`。GitHub main/tag 推送由 `mirror_gitee.yaml` 自动同步代码与标签；Release 工作流额外构建中文 Inno Setup 安装包，并把安装包、`.sig`、Gitee 版 `latest.json`、ARAM 数据发布到 Gitee Release。应用更新端点顺序为 Gitee `updater/latest.json` → GitHub 回退；ARAM feed 默认 Gitee，旧 GitHub 默认值自动迁移。CI 使用 Secret `GITEE_TOKEN`。
+- 本机中文安装包：`installer/seraphine-rust.iss`（Inno Setup 7，ChineseSimplified.isl，全程中文，MIT + 中文 EULA），输出 `installer/Output/SeraphineRust-2.0.2-setup-zh.exe`；静默安装/卸载 smoke 通过且保留用户数据。
 - 更新（2026-11-27 已发布）：GitHub Release `v2.0.1` 上线（安装包 4,357,657 B、`.sig`、`latest.json`、ARAM 数据），开箱直接启用 LCU 写操作（无环境变量/开关）。`v2.0.0` 保留为上一版。更新清单固定走 `https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/latest.json`；`updater` 与 `aram-data-latest` 均为预发布，不抢占 GitHub Latest。GitHub 会把上传文件名中的空格规范化为点号，因此清单安装包 URL 为 `Seraphine.Rust_2.0.1_x64-setup.exe`（实测 302→CDN 可下载，签名与 `.sig` 一致）；安装/重启待真机验证。
 - 发布清单：`rust/app/scripts/make_latest_json.py --installer … --signature … --version … --url … --pub-date …`。
-- Inno Setup 中文安装包（MIT 许可 + 中文用户协议）：`installer/seraphine-rust.iss`，输出 `installer/Output/SeraphineRust-2.0.0-setup-zh.exe`（本机 Inno Setup 7 编译；静默安装/卸载 smoke 通过，数据保留）。
-- 发布工作流：`.github/workflows/release_rust.yaml`（tag `v*` 触发；仓库 Secret `TAURI_SIGNING_PRIVATE_KEY` 已配置，密钥为空密码，无密码 Secret）。`workflow_dispatch` 仅做无发布演练：构建签名包与 `latest.json` 并上传运行制品，Release 创建步骤仅在 tag 触发时执行。
+- 发布工作流：`.github/workflows/release_rust.yaml`（tag `v*` 触发；仓库 Secret `TAURI_SIGNING_PRIVATE_KEY` 已配置，密钥为空密码，无密码 Secret；另配 `GITEE_TOKEN`）。`workflow_dispatch` 仅做无发布演练：构建签名包与 `latest.json` 并上传运行制品，Release/Gitee 创建步骤仅在 tag 触发时执行。
 - 本机 NSIS 缓存：`%LOCALAPPDATA%\tauri\NSIS`，需包含 `Plugins\x86-unicode\additional\nsis_tauri_utils.dll`；否则 Tauri 会联网下载并可能因代理 407 失败。
 - 性能（本机，2026-11-26）：启动 305 ms（Python 4,479 ms），空闲 CPU 1.25%（2.73%），主进程 WS 48.9 MB（221.9 MB）；WebView2 使进程树 WS 升至约 441 MB。详见 [PERF.md](PERF.md)。
 - Python 版保持原样，可继续运行；两版配置分离。

@@ -96,6 +96,13 @@ Context: 更新检查原先指向 `releases/latest/download/latest.json`。GitHu
 Decision: 更新清单改由固定标签 `updater` 提供：`releases/download/updater/latest.json`（预发布状态、`make_latest: false`），每次 tag 发布由工作流覆盖上传；ARAM 数据继续使用固定标签 `aram-data-latest`，同样标记预发布且不参与 Latest。两者与应用版本号解耦，不单独建库。
 Consequences: 数据刷新与应用发版互不影响，也不依赖 GitHub “Latest” 语义；代价是仓库多一个 `updater` 预发布条目，客户端需能访问 github.com（或被代理）。
 
+## ADR-017: GitHub 构建，Gitee 镜像分发与更新
+
+Status: accepted (2026-11-27，用户要求改善国内下载/更新体验)
+Context: 国内直连 GitHub 下载与更新不稳定；Gitee 可稳定访问，但构建与签名流程已在 GitHub Actions 落地。
+Decision: GitHub 仍是唯一构建与签名源；`mirror_gitee.yaml` 在 main/tag 推送时同步代码与标签到 `gitee.com/wxbns/seraphine-rust`；Release 工作流把 NSIS、中文 Inno Setup 安装包、Gitee 版 `latest.json` 与 ARAM 数据发布到 Gitee Release（固定标签 `updater`、`aram-data-latest`）。应用更新端点优先 Gitee、GitHub 回退；ARAM feed 默认指向 Gitee，并把旧 GitHub 默认值迁移为新地址。
+Consequences: 国内用户从 Gitee 下载与更新；Gitee 侧失败不回滚 GitHub Release；需要仓库 Secret `GITEE_TOKEN`，且 Gitee 发布在 Release 工作流末尾执行。
+
 ## ADR-013: 更新签名密钥由本地保管
 
 Status: accepted (2026-11-27，用户批准)

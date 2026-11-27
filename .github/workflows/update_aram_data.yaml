@@ -25,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-      GITEE_OWNER: ${{ secrets.GITEE_OWNER }}
-      GITEE_REPO: ${{ secrets.GITEE_REPO }}
+      GITEE_OWNER: wxbns
+      GITEE_REPO: seraphine-rust
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

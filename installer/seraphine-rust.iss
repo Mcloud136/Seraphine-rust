@@ -1,4 +1,4 @@
-#define AppVersion "2.0.1"
+#define AppVersion "2.0.2"
 #define AppName "Seraphine Rust"
 #define AppExe "seraphine-app.exe"
 #define SourceExe "..\rust\app\src-tauri\target\release\seraphine-app.exe"
@@ -9,9 +9,9 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=Mcloud
-AppPublisherURL=https://github.com/Mcloud136/Seraphine-rust
-AppSupportURL=https://github.com/Mcloud136/Seraphine-rust/issues
-AppUpdatesURL=https://github.com/Mcloud136/Seraphine-rust/releases
+AppPublisherURL=https://gitee.com/wxbns/seraphine-rust
+AppSupportURL=https://gitee.com/wxbns/seraphine-rust/issues
+AppUpdatesURL=https://gitee.com/wxbns/seraphine-rust/releases
 AppComments=英雄联盟战绩查询与辅助工具（Rust/Tauri 版）
 AppContact=Mcloud
 VersionInfoVersion={#AppVersion}.0
