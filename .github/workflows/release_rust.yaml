@@ -60,7 +60,7 @@ jobs:
           $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dry-run" }
           $installer = "rust/app/src-tauri/target/release/bundle/nsis/Seraphine Rust_${version}_x64-setup.exe"
           if (-not (Test-Path $installer)) { throw "Installer not found: $installer" }
-          $encoded = "Seraphine%20Rust_${version}_x64-setup.exe"
+          $encoded = "Seraphine.Rust_${version}_x64-setup.exe"
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$encoded"
           $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           python rust/app/scripts/make_latest_json.py `
