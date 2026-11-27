@@ -71,9 +71,15 @@ mod capabilities {
     ];
 }
 
+fn writes_enabled() -> bool {
+    env::var("SERAPHINE_ENABLE_LCU_WRITES")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
 fn active_capabilities() -> Vec<&'static str> {
     let mut capabilities = capabilities::ALL.to_vec();
-    if env::var_os("SERAPHINE_ENABLE_LCU_WRITES").as_deref() == Some(std::ffi::OsStr::new("1")) {
+    if writes_enabled() {
         capabilities.push("lcu.write");
     }
     capabilities
@@ -1983,8 +1989,7 @@ async fn handle_write_request(message: &Message, shared: Arc<Mutex<State>>) -> M
     let epoch = message.epoch.unwrap_or(0);
     shared.lock().await.metrics.requests += 1;
     let result: Result<Value, RpcError> = async {
-        if env::var_os("SERAPHINE_ENABLE_LCU_WRITES").as_deref() != Some(std::ffi::OsStr::new("1"))
-        {
+        if !writes_enabled() {
             return Err(RpcError::new("WriteDisabled", "LCU writes are disabled"));
         }
         let current_epoch = shared.lock().await.epoch;

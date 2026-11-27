@@ -121,8 +121,8 @@ seraphine-sidecar.exe / Rust
 
 ### 3.7 自动 B/P 与写操作
 
-- 默认真实写操作关闭。
-- 仅在显式设置 `SERAPHINE_ENABLE_LCU_WRITES=1` 时开放技术能力。
+- 发行版默认真实写操作开启，开箱即用。
+- 设置 `SERAPHINE_ENABLE_LCU_WRITES=0` 并重启可临时关闭写能力。
 - 写前重新获取 champ-select 会话并验证：
   - 本地 cell。
   - action 所属玩家。
@@ -391,11 +391,13 @@ SERAPHINE_ARAM_AUTO_UPDATE=0|1                           覆盖“自动更新 A
 
 ### 10.2 真实写入
 
-默认关闭。仅在完成政策审批和完整写操作验收后，才可考虑：
+发行版默认开启（用户已授权），无需环境变量。仅需临时停写时设置：
 
 ```text
-SERAPHINE_ENABLE_LCU_WRITES=1
+SERAPHINE_ENABLE_LCU_WRITES=0
 ```
+
+写操作仍受 Allowlist、阶段校验、读回确认与守卫记录约束。
 
 ### 10.3 Rust 构建
 
@@ -652,7 +654,7 @@ python -m unittest discover -s tests/contract -v
   Remove-Item Env:SERAPHINE_ENABLE_LCU_WRITES -ErrorAction SilentlyContinue
   .\dist\Seraphine\Seraphine.exe
   ```
-  日志位于 `%APPDATA%\Seraphine\log`；回滚时关闭程序，将 `SERAPHINE_BACKEND_MODE` 改为 `python` 或删除该环境变量后重启。灰度期间不得设置 `SERAPHINE_ENABLE_LCU_WRITES=1`。
+  日志位于 `%APPDATA%\Seraphine\log`；回滚时关闭程序，将 `SERAPHINE_BACKEND_MODE` 改为 `python` 或删除该环境变量后重启。需要临时停写时设置 `SERAPHINE_ENABLE_LCU_WRITES=0` 后重启。
 - 切换默认后再观察 7 天无 P0/P1，方可进入阶段 8。
 
 ### 15.3 shadow 对照验收
@@ -665,13 +667,13 @@ python -m unittest discover -s tests/contract -v
 - `python -m tests.bench.package_smoke .\dist\Seraphine`：manifest 路径/大小/SHA256、包内 `--version`、sidecar 握手、真实 Windows UI `Seraphine initialized` 标记；`--skip-ui` 不替代实机 UI 验收。
 - updater 回归：正常更新、损坏源拒绝、`UpdateBackup` 人工恢复、自更新 finalizer（对应 `tests/contract/test_update.py`、`test_updater_self_update.py`）。
 
-### 15.5 真实写操作政策审批清单（阶段 6 门槛）
+### 15.5 真实写操作政策记录
 
-以下各项全部勾选并由项目 owner 书面确认前，`SERAPHINE_ENABLE_LCU_WRITES` 不得置 1，发布包不得内置自动 B/P 真实写能力：
+2026-11-27 项目 owner 决定：发行版默认启用真实写操作，用户无需环境变量；写操作仍受 Allowlist、阶段校验、读回确认与守卫记录约束，并保留 `SERAPHINE_ENABLE_LCU_WRITES=0` 作为临时关闭开关。以下事项作为后续审计与告知记录维护，不再作为发布阻塞：
 
 - [ ] 功能范围与 Riot / 腾讯政策逐条对照结论（自动接受、自动选禁、自动换人分别评估）
 - [ ] 用户风险告知与免责声明更新（README"套盾"同步）
-- [ ] 默认关闭与显式 opt-in 的产品文案、设置项
+- [ ] 写操作开关（`SERAPHINE_ENABLE_LCU_WRITES=0`）与用户告知文案
 - [ ] 事故预案（误 ban/pick、`OutcomeUnknown` 处置、回滚开关与台账审计路径）
 - [ ] 灰度人群与观察期（≥7 天，日志脱敏审查）
 - [ ] 技术验收：§15.2 的 BP 全流程全绿 + 写安全回归全通过

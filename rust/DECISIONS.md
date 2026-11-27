@@ -75,12 +75,12 @@ Context: Tauri NSIS 的 currentUser 模式把应用装到 `%LOCALAPPDATA%\{produ
 Decision: Rust 版产品名使用 `Seraphine Rust`，安装到 `%LOCALAPPDATA%\Seraphine Rust`；数据仍使用 `%LOCALAPPDATA%\Seraphine` 与 `%APPDATA%\Seraphine`，实现并行共存。窗口标题与界面品牌仍为 Seraphine。
 Consequences: 安装包名称、开始菜单与卸载项显示“Seraphine Rust”；升级与卸载不会触碰旧版数据目录。
 
-## ADR-014: LCU 写操作灰度授权
+## ADR-014: LCU 写操作默认启用，守卫与读回确认保留
 
-Status: accepted (2026-11-27，用户批准“完整写操作灰度”)
-Context: 辅助工具、自动接受、BP 自动化依赖 LCU 写接口；此前按 ADR-010 默认禁用。用户已批准完整写操作灰度，但仍需可回滚与可审计。
-Decision: 默认仍关闭；仅设置 `SERAPHINE_ENABLE_LCU_WRITES=1` 时启用。所有写入经 Allowlist、稳定 operation id、请求哈希、Champ Select 读回确认、`OutcomeUnknown` 阻断与 30 天完成记录（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。先上线辅助工具手动操作与自动接受对局，再逐步开放 BP/禁用/技能自动化。
-Consequences: 灰度运行需显式环境变量与真机确认；失败或结果未知时禁止盲目重试；Python 版仍保留作为回退。
+Status: accepted (2026-11-27，用户要求发行版开箱即用，不再依赖启动环境变量)
+Context: 辅助工具、自动接受、BP 自动化依赖 LCU 写接口；此前为避免误写默认禁用并要求 `SERAPHINE_ENABLE_LCU_WRITES=1`。用户要求发行版直接可用。
+Decision: 默认启用；仅当显式设置 `SERAPHINE_ENABLE_LCU_WRITES=0` 时关闭（保留为排障/回滚开关）。所有写入仍经 Allowlist、稳定 operation id、请求哈希、Champ Select 读回确认、`OutcomeUnknown` 阻断与 30 天完成记录（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。
+Consequences: 用户无需任何环境配置即可使用辅助工具与自动化；自动接受默认开启，自动 ban/pick/技能仍由各自开关控制。需要临时停写时设置 `=0` 并重启应用。
 
 ## ADR-015: ARAM 数据由 CI 生成并发布到固定标签
 

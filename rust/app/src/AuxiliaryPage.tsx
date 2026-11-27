@@ -291,11 +291,11 @@ export default function AuxiliaryPage() {
       {!enabled && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            LCU 写操作当前关闭。以环境变量
+            LCU 写操作已被环境变量
             {" "}
-            <code>SERAPHINE_ENABLE_LCU_WRITES=1</code>
+            <code>SERAPHINE_ENABLE_LCU_WRITES=0</code>
             {" "}
-            启动应用后可用；所有请求仍经过写守卫与读回确认。
+            临时关闭；移除该变量并重启应用即可恢复。
           </MessageBarBody>
         </MessageBar>
       )}

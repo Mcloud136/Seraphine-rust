@@ -1,4 +1,4 @@
-#define AppVersion "2.0.0"
+#define AppVersion "2.0.1"
 #define AppName "Seraphine Rust"
 #define AppExe "seraphine-app.exe"
 #define SourceExe "..\rust\app\src-tauri\target\release\seraphine-app.exe"
