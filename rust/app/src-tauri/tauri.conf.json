@@ -51,7 +51,7 @@
       "active": true,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ2N0Q3OUIyNjI5MDhDNDkKUldSSmpKQmlzbmw5Umo5QWlHZUVmeDJSWS9rL3RyVDYyQkhtdUhxUkJTbmhBYXM0R1h4NFdFNVgK",
       "endpoints": [
-        "https://github.com/Mcloud136/Seraphine-rust/releases/latest/download/latest.json"
+        "https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/latest.json"
       ]
     }
   }

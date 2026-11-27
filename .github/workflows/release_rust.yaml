@@ -97,3 +97,16 @@ jobs:
             app/resource/data/AramBuff.json
             app/resource/data/aram-manifest.json
             latest.json
+
+      - name: Publish updater manifest
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: updater
+          name: Updater manifest
+          body: Tauri updater manifest (latest.json) for the newest application release.
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: latest.json

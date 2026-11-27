@@ -288,7 +288,7 @@ export default function SettingsPage({
       );
     } catch (cause) {
       setUpdate(null);
-      setUpdateStatus(`检查失败：${cause}`);
+      setUpdateStatus(friendlyError(cause, "检查更新失败，请检查网络后重试。"));
     } finally {
       setCheckingUpdate(false);
     }
@@ -301,7 +301,7 @@ export default function SettingsPage({
       await update.downloadAndInstall();
       await relaunch();
     } catch (cause) {
-      setUpdateStatus(`安装失败：${cause}`);
+      setUpdateStatus(friendlyError(cause, "安装更新失败，请稍后重试。"));
     } finally {
       setInstallingUpdate(false);
     }

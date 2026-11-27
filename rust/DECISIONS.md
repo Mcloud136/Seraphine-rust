@@ -89,6 +89,13 @@ Context: Wiki 的 Module:ChampionData/data 对非浏览器客户端可能返回 
 Decision: 生成器实现为 Rust CLI（`rust/tools/aram-data`），以 Wiki 为主源，解析 Lua 表（含 `[1]=` 数字键与算术表达式）；403 等失败时回退到 jsdelivr 上 `balance-buff-viewer-plugin` 的预解析 `balance.json`（MIT，同 Wiki 数据）。Python 脚本保留作参考与 Gitee 发布步骤。CI 每次生成后把 `AramBuff.json` 与 `aram-manifest.json` 发布到当前仓库固定标签 `aram-data-latest`（内置 `GITHUB_TOKEN`），并提供 sha256/大小/版本校验。应用侧 feed 默认指向本仓库固定标签 `aram-data-latest`（设置中可覆盖或清空）。
 Consequences: 数据更新不再依赖已停放的 jddld；GitHub runner 可直连 Wiki，本机被拦截时走回退源且与内置快照逐字段一致；固定标签下载 URL 长期稳定。
 
+## ADR-016: 应用更新清单与数据发布使用独立固定标签
+
+Status: accepted (2026-11-27)
+Context: 更新检查原先指向 `releases/latest/download/latest.json`。GitHub 只有一个 “Latest” 指针，`aram-data-latest` 这类数据发布会夺取它，导致 `latest.json` 302 到不含该资源的标签而检查失败。
+Decision: 更新清单改由固定标签 `updater` 提供：`releases/download/updater/latest.json`（预发布状态、`make_latest: false`），每次 tag 发布由工作流覆盖上传；ARAM 数据继续使用固定标签 `aram-data-latest`，同样标记预发布且不参与 Latest。两者与应用版本号解耦，不单独建库。
+Consequences: 数据刷新与应用发版互不影响，也不依赖 GitHub “Latest” 语义；代价是仓库多一个 `updater` 预发布条目，客户端需能访问 github.com（或被代理）。
+
 ## ADR-013: 更新签名密钥由本地保管
 
 Status: accepted (2026-11-27，用户批准)
