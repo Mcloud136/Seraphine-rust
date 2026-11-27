@@ -30,9 +30,7 @@ Seraphine Rust 是英雄联盟战绩查询与辅助工具的 Rust/Tauri 重写�
 | 主进程 Working Set（启动后 8 s） | 262.0 MB | 107.2 MB | 约 -59% |
 | 空闲 CPU（20 s，单核百分比） | 2.73% | 1.25% | 约 -54% |
 
-![任务管理器内存对比](docs/assets/seraphine-memory.png)
 
-> 口径说明：截图是任务管理器里的主进程对比。Tauri 会把界面放到 WebView2 子进程，因此“主进程更低”不等于“进程树总内存更低”；按完整进程树统计，Rust 约 494 MB、Python 约 262 MB。启动速度、主进程占用与 CPU 是明确优势，总驻留内存需要按进程树看。完整测试方法与原始数据见 [性能证据](rust/PERF.md)。
 
 ### 游戏内帧时间 A/B
 
