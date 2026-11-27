@@ -115,6 +115,5 @@ Execute o script `make.ps1` para criar `Seraphine.7z`:
 Seraphine não é endossado pela Riot Games e não reflete as opiniões da Riot Games. Riot Games e suas propriedades são marcas registradas da Riot Games, Inc.
 
 ## Licença ⚖️
-- O Seraphine é licenciado sob a [GPLv3](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE) para uso não comercial.
-- O uso comercial do código e arquivos binários é proibido.
+- O Seraphine é licenciado sob a [MIT](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE).
 

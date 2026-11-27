@@ -26,6 +26,7 @@
 - 辅助工具页已上线在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（已实测可逆）与窗口修复（2026-11-27 真机：1920×1080 → 1280×720 居中，UAC 自升生效）。
 - 更新：Tauri updater + 本地签名密钥；本地更新源实测发现 2.0.1 并展示安装按钮；安装/重启待真实版本发布验证。
 - 发布清单：`rust/app/scripts/make_latest_json.py --installer … --signature … --version … --url … --pub-date …`。
+- Inno Setup 中文安装包（MIT 许可 + 中文用户协议）：`installer/seraphine-rust.iss`，输出 `installer/Output/SeraphineRust-2.0.0-setup-zh.exe`（本机 Inno Setup 7 编译；静默安装/卸载 smoke 通过，数据保留）。
 - 发布工作流：`.github/workflows/release_rust.yaml`（tag `v*` 触发；需要仓库 Secrets：`TAURI_SIGNING_PRIVATE_KEY`，空密码时同时设置/留空 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。`workflow_dispatch` 仅做无发布演练：构建签名包与 `latest.json` 并上传运行制品，Release 创建步骤仅在 tag 触发时执行。
 - 本机 NSIS 缓存：`%LOCALAPPDATA%\tauri\NSIS`，需包含 `Plugins\x86-unicode\additional\nsis_tauri_utils.dll`；否则 Tauri 会联网下载并可能因代理 407 失败。
 - 性能（本机，2026-11-26）：启动 305 ms（Python 4,479 ms），空闲 CPU 1.25%（2.73%），主进程 WS 48.9 MB（221.9 MB）；WebView2 使进程树 WS 升至约 441 MB。详见 [PERF.md](PERF.md)。

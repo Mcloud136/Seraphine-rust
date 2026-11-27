@@ -199,5 +199,5 @@ Seraphine is not endorsed by Riot Games and does not reflect the views or opinio
   
 
 ## 许可证 ⚖️
-- 对于非商用行为，Seraphine 使用 [GPLv3](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE) 许可证。
+- Seraphine 使用 [MIT](https://github.com/Mcloud136/Seraphine-rust/blob/main/LICENSE) 许可证。
 - 禁止一切针对代码以及二进制文件的商用行为。

@@ -97,3 +97,6 @@ __pycache__/
 /rust/app/src-tauri/target/
 /rust/app/src-tauri/gen/
 /rust/app/screenshot.png
+
+# Inno Setup output
+/installer/Output/

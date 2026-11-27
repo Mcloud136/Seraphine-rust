@@ -309,7 +309,7 @@ tests/
    换源评估（2026-11-26 实测）：
    - **LoL Wiki `Module:ChampionData/data`（推荐）**：覆盖 ARAM 全部 10 项修正（`dmg_dealt`/`dmg_taken`/`healing`/`shielding`/`ability_haste`/`mana_regen`/`energy_regen`/`attack_speed`/`movement_speed`/`tenacity`），是社区插件 `nomi-san/balance-buff-viewer`（MIT）的数据来源。参考实现（已核实源码）：GitHub Actions 每周三/四/五用普通 `fetch`（UA `curl/8.13.0`）抓取模块 → `luaparse` 解析为 `{id,name,title,stats:{aram:{...}}}` → 生成 `dist/balance.json` 并内联进 npm 构建（约 49 KB JS / 100 KB 包）→ 运行时 stub 仅 `import('https://esm.sh/balance-buff-viewer-plugin@latest')`，**客户端不直连 wiki**；版本检测使用 **Data Dragon** `ddragon.leagueoflegends.com/api/versions.json` 的 `versions[0]`，按 SHA1 判数据变化。本机境内 `curl`/`aiohttp` 直连 403（Cloudflare 人机挑战），浏览器与 GitHub Actions 均可访问——挑战按客户端/IP 定向，非地域封锁。许可为 CC BY-SA（需核实版本并署名）。
    - **OP.GG `api/{region}/champions/aram*`**：实测响应无 balance/buff 字段，不能替代；继续用于 ARAM 梯队/出装。
-   - **`czgreat/aramhex-data`**：国服海克斯大乱斗胜率/海克斯统计（CC BY-NC 4.0），非 buff 数值且禁商用，不宜并入 GPLv3 发行物。
+   - **`czgreat/aramhex-data`**：国服海克斯大乱斗胜率/海克斯统计（CC BY-NC 4.0），非 buff 数值且禁商用，不宜并入 MIT 发行物。
    - **CommunityDragon 角色 bin JSON**：哈希键结构，需解哈希与编写抽取器，成本高，暂不推荐。
    - **WeGame / 腾讯官方**：WeGame 客户端不展示大乱斗 buff；腾讯 101 数据库仅有胜率类数据；官方无公开 buff API。
    - **全站镜像 wiki.leagueoflegends.com**：不建议。内容为 CC BY-SA 3.0（可再分发，需署名并相同方式共享），但图片等为 Riot 版权素材、不在 CC 覆盖范围；`api.php`/`Special:Export`/`robots.txt` 均受 Cloudflare 人机挑战（本机 403 实测），批量同步只能在 CI/浏览器环境做并受速率限制；复刻全站还需 Scribunto/Cargo/DynamicPageList4 等扩展栈。对 Seraphine 而言，只需"数据层快照"（单个 Lua 模块 → JSON），不必镜像站点。

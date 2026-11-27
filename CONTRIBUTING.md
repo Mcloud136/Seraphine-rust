@@ -117,4 +117,4 @@ Please be respectful and professional when contributing translations. We aim to 
 
 ## License
 
-By contributing translations, you agree that your contributions will be licensed under the project's [GPLv3 license](LICENSE). 
+By contributing translations, you agree that your contributions will be licensed under the project's [MIT license](LICENSE). 
