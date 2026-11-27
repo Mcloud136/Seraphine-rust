@@ -6,6 +6,8 @@ on:
     - cron: "0 9 * * 3,4,5"
   workflow_dispatch:
   push:
+    tags-ignore:
+      - "**"
     paths:
       - scripts/update_aram_data.py
       - scripts/publish_github_assets.py
