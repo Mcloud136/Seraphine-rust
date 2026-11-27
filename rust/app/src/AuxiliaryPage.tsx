@@ -88,7 +88,6 @@ const DISPLAY_QUEUES = [
 
 export default function AuxiliaryPage() {
   const styles = useStyles();
-  const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -117,9 +116,6 @@ export default function AuxiliaryPage() {
   const [lockState, setLockState] = useState({ available: false, locked: false });
 
   useEffect(() => {
-    void invoke<boolean>("writes_enabled")
-      .then(setEnabled)
-      .catch(() => setEnabled(false));
     void invoke<{ available: boolean; locked: boolean }>("lock_config_state")
       .then(setLockState)
       .catch(() => undefined);
@@ -288,17 +284,6 @@ export default function AuxiliaryPage() {
   return (
     <div className={styles.page}>
       <Title3>辅助工具</Title3>
-      {!enabled && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            LCU 写操作已被环境变量
-            {" "}
-            <code>SERAPHINE_ENABLE_LCU_WRITES=0</code>
-            {" "}
-            临时关闭；移除该变量并重启应用即可恢复。
-          </MessageBarBody>
-        </MessageBar>
-      )}
       {message && (
         <MessageBar
           intent={
@@ -323,7 +308,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -355,7 +340,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -408,7 +393,7 @@ export default function AuxiliaryPage() {
           })()}
           <Button
             size="small"
-            disabled={!enabled || busy || !backgroundSkin}
+            disabled={busy || !backgroundSkin}
             onClick={() => {
               void (async () => {
                 setBusy(true);
@@ -454,14 +439,14 @@ export default function AuxiliaryPage() {
           <Title3>挑战与徽章</Title3>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() => void removeChallengeTokens()}
           >
             移除挑战代币
           </Button>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() => void removePrestigeCrest()}
           >
             移除 prestige 徽章
@@ -523,7 +508,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -554,7 +539,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={!enabled || busy || !spectateName}
+            disabled={busy || !spectateName}
             onClick={() => void spectate()}
           >
             观战该玩家
@@ -587,7 +572,7 @@ export default function AuxiliaryPage() {
           <Title3>客户端</Title3>
           <Button
             size="small"
-            disabled={!enabled || busy}
+            disabled={busy}
             onClick={() =>
               void write(
                 "/lol-gameflow/v1/reconnect",

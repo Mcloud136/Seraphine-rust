@@ -41,9 +41,6 @@ pub fn reset(app: &tauri::AppHandle) {
 
 pub async fn on_champ_select(app: tauri::AppHandle, epoch: u64, _seq: u64, data: Value) {
     let state = app.state::<AppState>();
-    if !state.writes.enabled() {
-        return;
-    }
     let _serial = state.automation_lock.lock().await;
     let config = state.config.snapshot().await;
     let functions = &config.functions;
@@ -135,10 +132,7 @@ pub async fn on_champ_select(app: tauri::AppHandle, epoch: u64, _seq: u64, data:
 }
 
 fn terminal(error: &CoreError) -> bool {
-    matches!(
-        error,
-        CoreError::OperationConflict(_) | CoreError::WritesDisabled(_)
-    )
+    matches!(error, CoreError::OperationConflict(_))
 }
 
 const MAX_ATTEMPTS: u32 = 5;

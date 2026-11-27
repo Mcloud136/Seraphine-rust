@@ -133,9 +133,7 @@ class LcuWriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self.previous_write_setting = os.environ.get("SERAPHINE_ENABLE_LCU_WRITES")
         self.previous_appdata = os.environ.get("APPDATA")
-        os.environ["SERAPHINE_ENABLE_LCU_WRITES"] = "1"
         os.environ["APPDATA"] = self.directory.name
         self.client = self.make_client()
 
@@ -165,10 +163,6 @@ class LcuWriteConfirmationTests(unittest.IsolatedAsyncioTestCase):
             self.dummy.wait()
         self.server.shutdown()
         self.server.server_close()
-        if self.previous_write_setting is None:
-            os.environ.pop("SERAPHINE_ENABLE_LCU_WRITES", None)
-        else:
-            os.environ["SERAPHINE_ENABLE_LCU_WRITES"] = self.previous_write_setting
         if self.previous_appdata is None:
             os.environ.pop("APPDATA", None)
         else:

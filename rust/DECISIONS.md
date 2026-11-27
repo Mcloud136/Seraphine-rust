@@ -66,7 +66,7 @@ Consequences: CI 需安装 Node 与 WebView2 构建依赖；安装包检测 WebV
 
 Status: superseded by ADR-014 (2026-11-27)
 Decision: Rust 版默认禁用真实 LCU 写入，沿用现有写守卫、稳定 operation id、读回确认与 `OutcomeUnknown` 语义；启用需真机灰度与政策审批。
-Consequences: 新 UI 中所有写入口走 core 的守卫 API，不提供绕过开关。
+Consequences: 新 UI 中所有写入口走 core 的守卫 API，不提供绕过开关。2026-11-27 起由 ADR-014 取代：写操作直接启用，仍不提供绕过守卫的开关。
 
 ## ADR-012: 安装目录与产品名隔离
 
@@ -75,12 +75,12 @@ Context: Tauri NSIS 的 currentUser 模式把应用装到 `%LOCALAPPDATA%\{produ
 Decision: Rust 版产品名使用 `Seraphine Rust`，安装到 `%LOCALAPPDATA%\Seraphine Rust`；数据仍使用 `%LOCALAPPDATA%\Seraphine` 与 `%APPDATA%\Seraphine`，实现并行共存。窗口标题与界面品牌仍为 Seraphine。
 Consequences: 安装包名称、开始菜单与卸载项显示“Seraphine Rust”；升级与卸载不会触碰旧版数据目录。
 
-## ADR-014: LCU 写操作默认启用，守卫与读回确认保留
+## ADR-014: LCU 写操作直接启用，保留守卫与读回确认
 
-Status: accepted (2026-11-27，用户要求发行版开箱即用，不再依赖启动环境变量)
-Context: 辅助工具、自动接受、BP 自动化依赖 LCU 写接口；此前为避免误写默认禁用并要求 `SERAPHINE_ENABLE_LCU_WRITES=1`。用户要求发行版直接可用。
-Decision: 默认启用；仅当显式设置 `SERAPHINE_ENABLE_LCU_WRITES=0` 时关闭（保留为排障/回滚开关）。所有写入仍经 Allowlist、稳定 operation id、请求哈希、Champ Select 读回确认、`OutcomeUnknown` 阻断与 30 天完成记录（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。
-Consequences: 用户无需任何环境配置即可使用辅助工具与自动化；自动接受默认开启，自动 ban/pick/技能仍由各自开关控制。需要临时停写时设置 `=0` 并重启应用。
+Status: accepted (2026-11-27，用户要求发行版开箱即用且不保留开关)
+Context: 辅助工具、自动接受、BP 自动化依赖 LCU 写接口；此前为避免误写默认禁用并要求环境变量。
+Decision: 不设环境变量或产品开关，动作触发时直接调用已允许的 LCU 写接口。所有写入仍经 Allowlist、稳定 operation id、请求哈希、Champ Select 读回确认、`OutcomeUnknown` 阻断与 30 天完成记录（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。
+Consequences: 用户无需任何配置即可使用辅助工具与自动化；自动接受默认开启，自动 ban/pick/技能仍由各自开关控制。误写风险由守卫、阶段校验与读回确认承担。
 
 ## ADR-015: ARAM 数据由 CI 生成并发布到固定标签
 

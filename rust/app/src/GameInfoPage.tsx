@@ -376,7 +376,7 @@ function ChampSelectCard({
         </Text>
         <Caption1 className={styles.muted}>剩余 {seconds}s</Caption1>
         <Caption1 className={styles.muted}>
-          只读状态；禁用/选用写操作待政策审批
+          只读展示；禁用/选用由“游戏功能”页的自动化执行
         </Caption1>
       </div>
       <TeamSlots

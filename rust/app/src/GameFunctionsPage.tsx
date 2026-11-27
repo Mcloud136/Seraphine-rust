@@ -401,7 +401,7 @@ export default function GameFunctionsPage({
             })}
           </div>
           <Caption1 className={styles.muted}>
-            按分路保存；实际写操作仍受策略开关约束。
+            按分路保存；写入前会校验阶段并读回确认。
           </Caption1>
         </section>
       </div>

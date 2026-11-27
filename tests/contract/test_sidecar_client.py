@@ -2,7 +2,7 @@ import asyncio
 import os
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from app.backend.sidecar_client import SidecarClient
 
@@ -43,27 +43,16 @@ class SidecarClientTests(unittest.IsolatedAsyncioTestCase):
         diagnostics = await self.client.diagnostics()
         self.assertEqual(diagnostics["scheduler"]["game_state"], "in_game")
 
-    async def test_lcu_writes_are_disabled_by_default(self):
+    async def test_lcu_writes_are_available_without_environment_setup(self):
         from app.backend.protocol import RpcError
 
         await self.client.start()
+        diagnostics = await self.client.diagnostics()
+        self.assertTrue(diagnostics["writes"]["enabled"])
+        self.assertIn("lcu.write", diagnostics["capabilities"])
         with self.assertRaises(RpcError) as raised:
             await self.client.lcu_write("POST", "/lol-gameflow/v1/reconnect")
-        self.assertEqual(raised.exception.code, "WriteDisabled")
-        diagnostics = await self.client.diagnostics()
-        self.assertFalse(diagnostics["writes"]["enabled"])
-        self.assertEqual(diagnostics["writes"]["ledgerEntries"], 0)
-
-    async def test_lcu_write_capability_requires_explicit_opt_in(self):
-        from app.backend.protocol import RpcError
-
-        with patch.dict(os.environ, {"SERAPHINE_ENABLE_LCU_WRITES": "1"}):
-            await self.client.start()
-            diagnostics = await self.client.diagnostics()
-            self.assertTrue(diagnostics["writes"]["enabled"])
-            with self.assertRaises(RpcError) as raised:
-                await self.client.lcu_write("POST", "/lol-gameflow/v1/reconnect")
-            self.assertEqual(raised.exception.code, "NotConnected")
+        self.assertEqual(raised.exception.code, "NotConnected")
 
     async def test_timeout_sends_cancel_and_clears_pending(self):
         client = SidecarClient()

@@ -48,10 +48,6 @@ impl WriteService {
         }
     }
 
-    pub fn enabled(&self) -> bool {
-        writes_enabled()
-    }
-
     pub async fn execute(
         &self,
         operation_id: &str,
@@ -59,11 +55,6 @@ impl WriteService {
         path: &str,
         data: Option<Value>,
     ) -> Result<Value, CoreError> {
-        if !self.enabled() {
-            return Err(CoreError::WritesDisabled(
-                "LCU writes are disabled by SERAPHINE_ENABLE_LCU_WRITES=0".into(),
-            ));
-        }
         if operation_id.is_empty()
             || operation_id.len() > 128
             || !operation_id
@@ -205,14 +196,6 @@ impl WriteService {
     }
 }
 
-fn writes_enabled() -> bool {
-    write_gate(std::env::var("SERAPHINE_ENABLE_LCU_WRITES").ok().as_deref())
-}
-
-fn write_gate(value: Option<&str>) -> bool {
-    value != Some("0")
-}
-
 fn request_hash(method: &str, path: &str, data: Option<&Value>) -> String {
     let body = data.map(Value::to_string).unwrap_or_default();
     format!(
@@ -336,13 +319,6 @@ mod tests {
         assert!(!allowed("DELETE", "/lol-champ-select/v1/session"));
         assert!(!allowed("GET", "/lol-chat/v1/me"));
         assert!(!allowed("PUT", "/lol-chat/v1/me/../other"));
-    }
-
-    #[test]
-    fn write_gate_defaults_on_and_allows_an_explicit_kill_switch() {
-        assert!(write_gate(None));
-        assert!(write_gate(Some("1")));
-        assert!(!write_gate(Some("0")));
     }
 
     #[test]

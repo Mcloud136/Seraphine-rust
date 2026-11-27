@@ -71,17 +71,9 @@ mod capabilities {
     ];
 }
 
-fn writes_enabled() -> bool {
-    env::var("SERAPHINE_ENABLE_LCU_WRITES")
-        .map(|value| value != "0")
-        .unwrap_or(true)
-}
-
 fn active_capabilities() -> Vec<&'static str> {
     let mut capabilities = capabilities::ALL.to_vec();
-    if writes_enabled() {
-        capabilities.push("lcu.write");
-    }
+    capabilities.push("lcu.write");
     capabilities
 }
 
@@ -1989,9 +1981,6 @@ async fn handle_write_request(message: &Message, shared: Arc<Mutex<State>>) -> M
     let epoch = message.epoch.unwrap_or(0);
     shared.lock().await.metrics.requests += 1;
     let result: Result<Value, RpcError> = async {
-        if !writes_enabled() {
-            return Err(RpcError::new("WriteDisabled", "LCU writes are disabled"));
-        }
         let current_epoch = shared.lock().await.epoch;
         if message.epoch != Some(current_epoch) {
             return Err(RpcError::new("InvalidParams", "stale connection epoch"));

@@ -16,8 +16,6 @@ pub enum CoreError {
     Io(String),
     #[error("resource deferred: {0}")]
     Deferred(String),
-    #[error("LCU writes are disabled: {0}")]
-    WritesDisabled(String),
     #[error("operation conflict: {0}")]
     OperationConflict(String),
     #[error("outcome unknown: {0}")]

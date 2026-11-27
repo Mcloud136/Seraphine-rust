@@ -295,10 +295,6 @@ async fn fix_client_window(state: State<'_, AppState>) -> Result<Value, String> 
 }
 
 #[tauri::command]
-fn writes_enabled(state: State<'_, AppState>) -> bool {
-    state.writes.enabled()
-}
-
 fn persisted_settings_path(state: &AppState) -> Option<std::path::PathBuf> {
     let config = state.config.peek()?;
     let root = config.general.lol_path.first()?;
@@ -609,7 +605,6 @@ fn main() {
             champselect_state,
             live_game,
             fix_client_window,
-            writes_enabled,
             lock_config_state,
             set_lock_config,
             auxiliary_read,
@@ -662,9 +657,6 @@ fn main() {
                                 let state = accept_handle.state::<AppState>();
                                 let config = state.config.snapshot().await;
                                 if !config.functions.enable_auto_accept_matching {
-                                    return;
-                                }
-                                if !state.writes.enabled() {
                                     return;
                                 }
                                 if config.functions.auto_accept_matching_delay > 0 {
@@ -768,7 +760,7 @@ fn main() {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let state = automation_poll.state::<AppState>();
                     let status = state.session.status().await;
-                    if !status.connected || !state.writes.enabled() {
+                    if !status.connected {
                         continue;
                     }
                     let phase = state

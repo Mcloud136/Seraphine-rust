@@ -21,7 +21,7 @@
 - ARAM 应用侧真机热更新已通过（2026-11-27）：将缓存版本置为 16.22.1 后，应用经设置页代理（本机以 SSH→SOCKS→本地 CONNECT 桥接 GitHub）拉取 `aram-data-latest`，落盘 `AramBuff.json` 16.23.1（132 英雄）与 `aram-manifest.json`，sha256/大小与清单一致，日志无失败；随后恢复了原配置（feed 留空、代理关闭）。
 - 仓库已同步 Rust 应用本体与工作流（`14cb684` 起），GitHub 上 `Build Seraphine`/`Release Rust app`/`Update ARAM data` 三个工作流均处于 active。Build 流水线中 Rust 全工作区校验、Python 契约测试（CI 注解定位并修复了短路径临时目录断言）、PyInstaller 打包均已通过；打包 smoke 已补无头环境变量。ARAM feed 默认值保持“按需配置”，避免首次启动依赖外网。
 - 安装包：`rust/app/src-tauri/target/release/bundle/nsis/Seraphine Rust_2.0.0_x64-setup.exe`（4.15 MiB / 4,355,828 B，currentUser，已用本地 updater 私钥签名，含 2026-11-27 全部界面与文案改动；`.sig` 同目录）。`latest.json` 可用 `make_latest_json.py` 生成（注意在 Git Bash 下输出路径用正斜杠）。已用**全新克隆**（`git clone` → `npm ci` → `npx tauri build`）复验：签名产物 4,322,871 B 构建成功，静默安装后 ProductVersion=2.0.0，卸载移除程序目录且 `%LOCALAPPDATA%\Seraphine`、`%APPDATA%\Seraphine` 数据保留。
-- LCU 写操作（2026-11-27 起默认启用）：无需环境变量；写入经 Allowlist、operation id、请求哈希、选人读回确认与 30 天守卫（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。设置 `SERAPHINE_ENABLE_LCU_WRITES=0` 并重启可临时关闭。已实测 `PUT /lol-chat/v1/me` 成功并落盘守卫。
+- LCU 写操作（2026-11-27 起直接启用，无环境变量/产品开关）：写入经 Allowlist、operation id、请求哈希、选人读回确认与 30 天守卫（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。已实测 `PUT /lol-chat/v1/me` 成功并落盘守卫。
 - 自动化已真机通过（2026-11-27）：自动接受（18:39:11 `auto accepted match`，未手动点击）；征召自定义技能 7/6→4/14、ban 安妮（BAN_PICK 首秒两步 PATCH）、pick 艾希并锁定；`write-guards.json` 落盘。客户端会静默丢弃 PLANNING 阶段的 ban 写入，故 ban 最早在 BAN_PICK 第一秒生效；操作 id 使用每局 nonce，避免 `epoch:seq` 跨局碰撞导致“重放未写”。
 - 辅助工具页已上线在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（已实测可逆）与窗口修复（2026-11-27 真机：1920×1080 → 1280×720 居中，UAC 自升生效）。
 - 更新（2026-11-27 已发布）：GitHub Release `v2.0.0` 上线（安装包 4,356,941 B、`.sig`、`latest.json`、ARAM 数据）。更新清单固定走 `https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/latest.json`；`updater` 与 `aram-data-latest` 均为预发布，不抢占 GitHub Latest。GitHub 会把上传文件名中的空格规范化为点号，因此清单安装包 URL 为 `Seraphine.Rust_2.0.0_x64-setup.exe`（实测 302→CDN 可下载，签名与 `.sig` 一致）；安装/重启待真机验证。
@@ -36,8 +36,8 @@
 
 1. Tauri updater：签名密钥、更新清单与回滚流程（W0-7/W5-3，需要确认私钥保管）。
 2. 选人/大乱斗真机验证 W2-1/W2-3；配置真实 ARAM feed 验证远端更新。
-3. Wave 2-2 BP 写操作（写守卫 + 政策审批后启用）。
-4. 辅助工具页（在线状态/背景/段位等写操作，需审批）与游戏内信息条。
+3. Wave 2-2 BP 写操作（已完成：写守卫 + 默认直接启用）。
+4. 辅助工具页（在线状态/背景/段位等写操作，已上线）与游戏内信息条。
 5. i18n（en/pt）与 W0-2 sidecar 薄壳化。
 
 ## 关键文件
@@ -62,5 +62,5 @@
 - 最近回归：`cargo test --release --workspace` 全绿；app 2 通过；Python 93 通过（1 跳过）。sidecar 内存断言按 release 口径（release 9.22 MiB 通过；debug 11.3 MB 超 10 MiB 为已知构建差异）。PresentMon 真机 A/B 已完成（同局两对、各 60 s）：p99 6.16/6.42 ms（应用运行）vs 6.36/6.34 ms（停止），0 次 >50 ms；采集脚本 `bench_game_frames.py`/`analyze_game_frames.py` 已修复 ETW 残留会话与 UTF-16 CSV。
 
 - Tauri 前端构建不通过 `rust-anything app lift` 验证，功能等价依赖真机核对表。
-- 真实 LCU 写操作仍禁用，需真机灰度与政策审批。
+- LCU 写操作直接启用（无环境变量/开关），仍受写守卫、阶段校验与读回确认约束。
 - OP.GG、TFT、BP 与设置页尚未迁移。
