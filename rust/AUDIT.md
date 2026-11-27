@@ -2,6 +2,8 @@
 
 目标：把 Seraphine 整个应用升级为 Rust（Tauri 外壳 + Rust 业务核心 + React 前端），功能等价并提升运行效率。
 
+> 2026-11-27 更新：main 已移除 Python/PyQt 应用与 PowerShell 脚本，旧版归档在 `legacy-python` 分支；当前 CI 为 `Build Rust app`，发布/数据工具为 Rust `release-tool`。下文的 Python 测试数据是迁移前证据。
+
 结论：**未完成**。核心功能、设置、写操作、更新与打包已落地并有真机证据；但仍有需要真实对局/真实发布才能关闭的硬门禁。
 
 ## 已达成（证据）

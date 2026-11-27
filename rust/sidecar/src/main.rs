@@ -2826,16 +2826,16 @@ impl NetworkSnapshot {
             "champion" => (
                 "champion icons",
                 "png",
-                "app/resource/images/champion-0.png",
+                "rust/resources/images/champion-0.png",
             ),
-            "item" => ("item icons", "png", "app/resource/images/item-0.png"),
+            "item" => ("item icons", "png", "rust/resources/images/item-0.png"),
             "spell" => (
                 "summoner spell icons",
                 "png",
-                "app/resource/images/summoner_empty.png",
+                "rust/resources/images/summoner_empty.png",
             ),
-            "rune" => ("rune icons", "png", "app/resource/images/rune-0.png"),
-            "augment" => ("augment icons", "png", "app/resource/images/item-0.png"),
+            "rune" => ("rune icons", "png", "rust/resources/images/rune-0.png"),
+            "augment" => ("augment icons", "png", "rust/resources/images/item-0.png"),
             _ => return spec,
         };
         let path = if kind == "champion" {

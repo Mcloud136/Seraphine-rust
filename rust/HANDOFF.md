@@ -19,19 +19,19 @@
 - ARAM 远端更新：manifest/sha256/大小/版本校验、主机白名单、10 分钟节流、原子替换；设置页可手动检查。CI 生成已补自动回退：Wiki 被 Cloudflare 拦截（403）时改用 jsdelivr 上 `balance-buff-viewer-plugin` 的预解析 `balance.json`（MIT，同 Wiki 数据；本机实测 132 英雄与内置快照逐字段一致）。工作流同时把两个文件发布到当前仓库固定标签 `aram-data-latest`（用内置 `GITHUB_TOKEN`，无需额外 Secret），稳定 feed：`https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json`。
 - ARAM CI 已端到端跑通并由 Rust CLI 生成（2026-11-27）：`rust/tools/aram-data` 移植了 Lua 解析、条目构建与 manifest 写入，`Update ARAM data` 全绿，`aram-data-latest` 发布含 `aram-manifest.json`（318 B）与 `AramBuff.json`（21,488 B）；下载校验 sha256/大小/版本 16.23.1/132 英雄全部一致，GitHub runner 走 Wiki 主源。Rust 与 Python 生成器在真实 Wiki 模块与 bootstrap JSON 上逐字段一致；Python 脚本保留作参考与 Gitee 发布步骤。
 - ARAM 应用侧真机热更新已通过（2026-11-27）：将缓存版本置为 16.22.1 后，应用经设置页代理（本机以 SSH→SOCKS→本地 CONNECT 桥接 GitHub）拉取 `aram-data-latest`，落盘 `AramBuff.json` 16.23.1（132 英雄）与 `aram-manifest.json`，sha256/大小与清单一致，日志无失败；随后恢复了原配置（feed 留空、代理关闭）。
-- 仓库已同步 Rust 应用本体与工作流（`14cb684` 起），GitHub 上 `Build Seraphine`/`Release Rust app`/`Update ARAM data` 三个工作流均处于 active。Build 流水线中 Rust 全工作区校验、Python 契约测试（CI 注解定位并修复了短路径临时目录断言）、PyInstaller 打包均已通过；打包 smoke 已补无头环境变量。ARAM feed 默认值保持“按需配置”，避免首次启动依赖外网。
-- 安装包：`rust/app/src-tauri/target/release/bundle/nsis/Seraphine Rust_2.0.0_x64-setup.exe`（4.15 MiB / 4,355,828 B，currentUser，已用本地 updater 私钥签名，含 2026-11-27 全部界面与文案改动；`.sig` 同目录）。`latest.json` 可用 `make_latest_json.py` 生成（注意在 Git Bash 下输出路径用正斜杠）。已用**全新克隆**（`git clone` → `npm ci` → `npx tauri build`）复验：签名产物 4,322,871 B 构建成功，静默安装后 ProductVersion=2.0.0，卸载移除程序目录且 `%LOCALAPPDATA%\Seraphine`、`%APPDATA%\Seraphine` 数据保留。
+- 仓库已同步 Rust 应用本体与工作流（`14cb684` 起），GitHub 上 `Build Rust app`/`Release Rust app`/`Update ARAM data` 三个工作流均处于 active；Build 流水线只做 Rust 格式/测试/clippy 与前端构建，不再运行 Python 或 PowerShell。ARAM feed 默认指向 Gitee，旧 GitHub 默认值自动迁移。
+- 安装包：`rust/app/src-tauri/target/release/bundle/nsis/Seraphine Rust_2.0.2_x64-setup.exe`（4,356,274 B，currentUser，已用 updater 私钥签名；`.sig` 同目录）。`latest.json` 由 `rust/tools/release` 生成。已用全新克隆（`git clone` → `npm ci` → `npx tauri build`）复验签名构建；静默安装/卸载 smoke 通过且用户数据保留。
 - LCU 写操作（2026-11-27 起直接启用，无环境变量/产品开关）：写入经 Allowlist、operation id、请求哈希、选人读回确认与 30 天守卫（`%LOCALAPPDATA%\Seraphine\app\write-guards.json`）。已实测 `PUT /lol-chat/v1/me` 成功并落盘守卫。
 - 自动化已真机通过（2026-11-27）：自动接受（18:39:11 `auto accepted match`，未手动点击）；征召自定义技能 7/6→4/14、ban 安妮（BAN_PICK 首秒两步 PATCH）、pick 艾希并锁定；`write-guards.json` 落盘。客户端会静默丢弃 PLANNING 阶段的 ban 写入，故 ban 最早在 BAN_PICK 第一秒生效；操作 id 使用每局 nonce，避免 `epoch:seq` 跨局碰撞导致“重放未写”。
 - 辅助工具页已上线在线状态/可用性/头像/背景/段位展示/观战/重连/重启/代币/徽章/锁定配置（已实测可逆）与窗口修复（2026-11-27 真机：1920×1080 → 1280×720 居中，UAC 自升生效）。
 - Gitee 镜像与分发（2026-11-27）：公开仓库 `https://gitee.com/wxbns/seraphine-rust`。GitHub main/tag 推送由 `mirror_gitee.yaml` 自动同步代码与标签；Release 工作流额外构建中文 Inno Setup 安装包，并把安装包、`.sig`、Gitee 版 `latest.json`、ARAM 数据发布到 Gitee Release。应用更新端点顺序为 Gitee `updater/latest.json` → GitHub 回退；ARAM feed 默认 Gitee，旧 GitHub 默认值自动迁移。CI 使用 Secret `GITEE_TOKEN`。
 - 中文安装包：`installer/seraphine-rust.iss` 引用仓库内置 `installer/ChineseSimplified.isl`（MIT，Inno 6.5+/7.x 可用），全程中文，MIT + 中文 EULA；本机 Inno 7.2 输出 `installer/Output/SeraphineRust-2.0.2-setup-zh.exe`，CI 也使用同一语言文件构建。
 - 更新（2026-11-27 已发布 2.0.2）：GitHub Release `v2.0.2`（NSIS 4,356,274 B、中文 Inno 6,116,218 B、`.sig`、`latest.json`、ARAM）与 Gitee Release `v2.0.2`（NSIS 4,356,274 B、中文 Inno 6,120,020 B、`.sig`、Gitee 版 `latest.json`、ARAM）均已上线。更新端点优先 `https://gitee.com/wxbns/seraphine-rust/releases/download/updater/latest.json`，GitHub 回退；Gitee 清单签名与 NSIS `.sig` 一致。Gitee 大文件上传已加重试与 300 s 超时，2.0.2 首次超时后已补齐资产。安装/重启待真机验证。
-- 发布清单：`rust/app/scripts/make_latest_json.py --installer … --signature … --version … --url … --pub-date …`。
+- 发布工具：`rust/tools/release`（`manifest` / `rewrite-manifest` / `version` / `aram-report` / `gitee`），替代已删除的 Python/PowerShell 脚本。
 - 发布工作流：`.github/workflows/release_rust.yaml`（tag `v*` 触发；仓库 Secret `TAURI_SIGNING_PRIVATE_KEY` 已配置，密钥为空密码，无密码 Secret；另配 `GITEE_TOKEN`）。`workflow_dispatch` 仅做无发布演练：构建签名包与 `latest.json` 并上传运行制品，Release/Gitee 创建步骤仅在 tag 触发时执行。
 - 本机 NSIS 缓存：`%LOCALAPPDATA%\tauri\NSIS`，需包含 `Plugins\x86-unicode\additional\nsis_tauri_utils.dll`；否则 Tauri 会联网下载并可能因代理 407 失败。
 - 性能（本机，2026-11-26）：启动 305 ms（Python 4,479 ms），空闲 CPU 1.25%（2.73%），主进程 WS 48.9 MB（221.9 MB）；WebView2 使进程树 WS 升至约 441 MB。详见 [PERF.md](PERF.md)。
-- Python 版保持原样，可继续运行；两版配置分离。
+- 旧 Python/PyQt 版归档在 `legacy-python` 分支，main 不再包含 Python 应用、Python 测试或 PowerShell 脚本。
 
 ## 下一步
 
@@ -51,17 +51,15 @@
 - Tauri 后端：`rust/app/src-tauri/src/main.rs`
 - 前端：`rust/app/src/App.tsx`、`rust/app/src/SearchPage.tsx`
 - 共享库：`rust/crates/seraphine-core/src/`
-- 截图与输入辅助：`rust/app/scripts/`
 
 ## 观察（用户已取消七天门禁）
 
-- 用户 2026-11-27 决定：不做七天审计，以逐模式功能自测通过为准；Python/sidecar 在自测确认后退役。
-- 工具仍保留：`python rust/app/scripts/observe.py --since <YYYY-MM-DDTHH:MM>` 可按需汇总连接/断线/写失败/ARAM 更新/每日告警数。
+- Python 旧版已归档到 `legacy-python` 分支；Rust sidecar 保留在 `rust/sidecar` 作为兼容层。
+- 旧的观察/测量脚本已随 Python 版归档到 `legacy-python` 分支，main 不再保留。
 
 ## 已知风险
 
-- 最近回归：`cargo test --release --workspace` 全绿；app 2 通过；Python 93 通过（1 跳过）。sidecar 内存断言按 release 口径（release 9.22 MiB 通过；debug 11.3 MB 超 10 MiB 为已知构建差异）。PresentMon 真机 A/B 已完成（同局两对、各 60 s）：p99 6.16/6.42 ms（应用运行）vs 6.36/6.34 ms（停止），0 次 >50 ms；采集脚本 `bench_game_frames.py`/`analyze_game_frames.py` 已修复 ETW 残留会话与 UTF-16 CSV。
+- 最近回归：`cargo test --release --workspace` 全绿；Tauri app 2 通过；`cargo clippy -D warnings` 通过。sidecar 内存断言按 release 口径通过（debug 11.3 MB 超 10 MiB 为已知构建差异）。PresentMon 真机 A/B 已完成（同局两对、各 60 s）：p99 6.16/6.42 ms（应用运行）vs 6.36/6.34 ms（停止），0 次 >50 ms。
 
 - Tauri 前端构建不通过 `rust-anything app lift` 验证，功能等价依赖真机核对表。
 - LCU 写操作直接启用（无环境变量/开关），仍受写守卫、阶段校验与读回确认约束。
-- OP.GG、TFT、BP 与设置页尚未迁移。

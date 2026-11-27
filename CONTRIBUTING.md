@@ -1,120 +1,45 @@
-# Contributing to Seraphine Translations
+# 贡献指南
 
-Thank you for your interest in helping with Seraphine's translations! This guide will help you understand how to contribute translations to the project.
+Seraphine Rust 的主线是 Tauri 2 + Rust 业务核心 + React/Fluent UI。提交前请确保变更符合“能用 API 就不调用外部命令/脚本”的原则。
 
-## Translation Files
+## 代码位置
 
-Seraphine uses Qt's translation system (`.ts` files) for UI translations and JSON files for game-related content. The translation files are located in:
+- Rust 业务核心：`rust/crates/seraphine-core`
+- Tauri 后端与命令：`rust/app/src-tauri`
+- 前端页面：`rust/app/src`
+- ARAM 数据生成：`rust/tools/aram-data`
+- 发布清单与 Gitee 发布：`rust/tools/release`
+- 安装器：`installer/`
 
-- UI Translations: `app/resource/i18n/Seraphine.{locale}.ts`
-- Game Modes: `app/resource/i18n/gamemodes.json`
+旧 Python/PyQt 实现已归档在 `legacy-python` 分支，不在 `main` 接受新功能修改。
 
-Currently supported languages:
-- English (en_US)
-- Portuguese (pt_BR)
-- Chinese Simplified (zh_CN)
+## 提交前检查
 
-## How to Add/Update Translations
+```bash
+cd rust
+cargo fmt --all -- --check
+cargo test --release --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 
-### UI Translations (.ts files)
+cd app
+npm ci
+npm run build
+```
 
-1. **File Structure**
-   - Each translation file follows the Qt TS format
-   - Files are named as `Seraphine.{locale}.ts` (e.g., `Seraphine.en_US.ts`)
-   - Translations are organized by context (e.g., `ToolsTranslator`, `MainWindow`, `SettingInterface`)
+## 变更原则
 
-2. **Adding New Translations**
-   ```xml
-   <context>
-       <name>ContextName</name>
-       <message>
-           <location filename="../../path/to/source.py" line="123"/>
-           <source>Original Text</source>
-           <translation>Translated Text</translation>
-       </message>
-   </context>
-   ```
+- 优先使用 LCU/SGP/HTTP API 与 Windows API；不要在应用功能里调用 PowerShell、`cmd` 或外部脚本。
+- 写操作必须经过现有 Allowlist、阶段校验、operation id、请求哈希、读回确认与写守卫。
+- 用户可见错误使用友好文案；技术细节写入日志。
+- UI 文案使用国服术语；新增英雄搜索别名时更新生成数据。
+- 不要在仓库中提交 updater 私钥、Gitee Token 或其他凭据。
 
-3. **Best Practices**
-   - Keep translations concise and natural
-   - Maintain consistent terminology
-   - Preserve any HTML tags in the original text
-   - Test translations in the application
+## Pull Request
 
-### Game Modes (gamemodes.json)
+1. 从 `main` 创建分支。
+2. 说明变更范围、测试方式与真机证据。
+3. 涉及发布/更新的改动请同步检查 `release_rust.yaml` 与 `mirror_gitee.yaml`。
 
-1. **File Structure**
-   ```json
-   {
-       "Original Text": {
-           "en": "English Translation",
-           "pt": "Portuguese Translation"
-       }
-   }
-   ```
+## 许可
 
-2. **Adding New Translations**
-   - Add entries for both English and Portuguese
-   - Keep game mode names consistent with official League of Legends terminology
-   - Use proper capitalization and formatting
-
-## Translation Guidelines
-
-1. **General Rules**
-   - Use proper grammar and punctuation
-   - Maintain consistent terminology across all translations
-   - Keep translations natural and idiomatic
-   - Preserve any special characters or formatting
-
-2. **Game-Specific Terms**
-   - Use official League of Legends terminology
-   - Keep champion names in English
-   - Use consistent translations for roles and game modes
-   - Follow Riot Games' style guide for game terms
-
-3. **Technical Terms**
-   - Keep technical terms in English if no common translation exists
-   - Use consistent translations for UI elements
-   - Maintain proper capitalization
-
-## Testing Translations
-
-1. **Before Submitting**
-   - Test translations in the application
-   - Verify all strings are properly translated
-   - Check for any formatting issues
-   - Ensure no translation keys are missing
-
-2. **Common Issues to Check**
-   - Missing translations
-   - Incorrect formatting
-   - Inconsistent terminology
-   - Grammar and spelling errors
-
-## Submitting Changes
-
-1. **Pull Request Process**
-   - Create a new branch for your translations
-   - Update only the necessary translation files
-   - Include a clear description of changes
-   - Reference any related issues
-
-2. **Commit Messages**
-   - Use clear, descriptive commit messages
-   - Specify which language(s) were updated
-   - Mention the type of changes (new translations, updates, fixes)
-
-## Getting Help
-
-If you need assistance with translations:
-- Open an issue on GitHub
-- Join our community discussions
-- Reference the official League of Legends terminology
-
-## Code of Conduct
-
-Please be respectful and professional when contributing translations. We aim to maintain a welcoming and inclusive community for all contributors.
-
-## License
-
-By contributing translations, you agree that your contributions will be licensed under the project's [MIT license](LICENSE). 
+提交即表示同意以项目的 [MIT License](LICENSE) 授权。

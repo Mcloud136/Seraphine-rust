@@ -2,6 +2,8 @@
 
 状态：done / partial / blocked / todo。证据以真机截图、测试或代码路径为准。
 
+> 2026-11-27 更新：main 已移除 Python/PyQt 实现，旧版在 `legacy-python` 分支；表中的 Python 来源列用于历史对照。
+
 | 功能 | Python 来源 | Rust 状态 | 证据 / 差距 |
 | --- | --- | --- | --- |
 | 启动、无边框窗口、托盘、单实例 | main.py / main_window.py | done | 真机启动；托盘显示/退出 |

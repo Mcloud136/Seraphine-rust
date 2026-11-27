@@ -37,7 +37,7 @@ fn parse_args() -> Result<Args, String> {
         source: "auto".into(),
         balance_json: None,
         version: None,
-        output_dir: PathBuf::from("app/resource/data"),
+        output_dir: PathBuf::from("rust/resources/data"),
         names_url: fetch::HERO_LIST_URL.into(),
         no_names: false,
         dry_run: false,

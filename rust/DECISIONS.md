@@ -103,6 +103,13 @@ Context: 国内直连 GitHub 下载与更新不稳定；Gitee 可稳定访问，
 Decision: GitHub 仍是唯一构建与签名源；`mirror_gitee.yaml` 在 main/tag 推送时同步代码与标签到 `gitee.com/wxbns/seraphine-rust`；Release 工作流把 NSIS、中文 Inno Setup 安装包、Gitee 版 `latest.json` 与 ARAM 数据发布到 Gitee Release（固定标签 `updater`、`aram-data-latest`）。应用更新端点优先 Gitee、GitHub 回退；ARAM feed 默认指向 Gitee，并把旧 GitHub 默认值迁移为新地址。
 Consequences: 国内用户从 Gitee 下载与更新；Gitee 侧失败不回滚 GitHub Release；需要仓库 Secret `GITEE_TOKEN`，且 Gitee 发布在 Release 工作流末尾执行。
 
+## ADR-018: main 只保留 Rust/Tauri，Python 与 PowerShell 归档
+
+Status: accepted (2026-11-27，用户要求 GitHub 语言统计以 Rust 为主，并禁止用 PowerShell 实现功能)
+Context: GitHub 语言条中 Python 占 53%、PowerShell 占 0.8%；产品 Rust 代码本身没有 PowerShell/subprocess 调用，但旧 Python 应用与开发/打包脚本仍留在 main。
+Decision: 把 `app/`、`main.py`、Python 测试与发布脚本、`make.ps1` 及 `rust/app/scripts/*.ps1` 归档到 `legacy-python` 分支；main 删除这些文件。ARAM 数据/图标资源迁到 `rust/resources`；`latest.json` 生成、版本读取、ARAM 报告与 Gitee Release 发布统一由 Rust `rust/tools/release` 完成；`Build Seraphine` 改为 Rust-only 的 `Build Rust app`。
+Consequences: main 以 Rust/TypeScript 为主，发布链路不再依赖 Python/PowerShell；旧版仍可从 `legacy-python` 分支取用；后续功能必须走 API 或 Rust 工具。
+
 ## ADR-013: 更新签名密钥由本地保管
 
 Status: accepted (2026-11-27，用户批准)

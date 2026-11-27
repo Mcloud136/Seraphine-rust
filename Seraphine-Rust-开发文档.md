@@ -1,5 +1,7 @@
 # Seraphine Rust Sidecar 设计与开发进度文档
 
+> 历史文档：Python/PyQt 版已归档到 `legacy-python` 分支；当前 `main` 只维护 Rust/Tauri 主应用。最新说明见 [readme.md](readme.md) 与 [docs/Seraphine-Rust-升级总结.md](docs/Seraphine-Rust-升级总结.md)。
+
 - 文档日期：2026-11-26
 - 修订：2026-11-26 补齐 §14 IPC 契约、§15 验收标准、§16 阶段 8 清理与多客户端规范；修正 hello 字段说明、1.5 s 轮询归属与首次验证命令的构建口径
 - 项目状态：开发中，未达到默认切换与发布条件

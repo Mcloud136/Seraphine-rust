@@ -107,7 +107,7 @@ GitHub https://github.com/Mcloud136/Seraphine-rust/releases/download/updater/lat
 
 前置条件：Windows 10 1809+ x64、Node.js 22、Rust stable、Visual Studio Build Tools（C++ 桌面开发）、WebView2 Runtime。
 
-```powershell
+```bash
 git clone https://github.com/Mcloud136/Seraphine-rust.git
 cd Seraphine-rust/rust/app
 npm ci
@@ -116,26 +116,26 @@ npx tauri build
 
 运行 Rust 测试：
 
-```powershell
-cd ..\..
+```bash
+cd ../..
 cargo test --release --workspace
 ```
 
 构建中文 Inno Setup 安装包（需安装 Inno Setup 6.5+ 或 7.x）：
 
-```powershell
-& "C:\Program Files\Inno Setup 7\ISCC.exe" installer\seraphine-rust.iss
+```text
+"C:\Program Files\Inno Setup 7\ISCC.exe" installer\seraphine-rust.iss
 ```
 
 签名构建需要本机的 updater 私钥；私钥不进入仓库，也不要在日志或截图中暴露：
 
-```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content "$env:USERPROFILE\.seraphine\updater.key" -Raw
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.seraphine/updater.key")"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
 npx tauri build
 ```
 
-Python/PyQt 实现仍保留在 `app/` 与 `main.py`，用于参考与回退；当前主线是 `rust/app`。
+旧 Python/PyQt 版已归档在 GitHub 的 `legacy-python` 分支；`main` 只维护 Rust/Tauri 与 Rust 发布工具，不再包含 Python 应用或 PowerShell 脚本。
 
 ## 项目结构
 
@@ -144,10 +144,13 @@ rust/
   app/                  Tauri 2 工程（src-tauri + React 前端）
   crates/seraphine-core 配置、LCU/SGP、战绩、搜索、OP.GG、ARAM、自动化
   tools/aram-data       ARAM 数据生成 CLI（Wiki / jsdelivr）
-  sidecar/              旧版 Python 后端的 Rust sidecar（保留）
-  installer/            NSIS/Inno 相关资源
-scripts/                数据发布与维护脚本
+  tools/release         latest.json 生成与 Gitee Release 发布
+  sidecar/              旧 Python 后端的 Rust sidecar（保留）
+  resources/data        ARAM 内置快照与清单
+  resources/images      图标回退资源
+installer/              Inno Setup / NSIS 相关资源
 docs/                   升级总结与截图
+.github/workflows/      Rust 构建、发布与 Gitee 镜像
 ```
 
 ## 安全与合规

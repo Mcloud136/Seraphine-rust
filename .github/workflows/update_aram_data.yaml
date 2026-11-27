@@ -11,10 +11,9 @@ on:
     tags-ignore:
       - "**"
     paths:
-      - scripts/update_aram_data.py
-      - scripts/publish_github_assets.py
       - .github/workflows/update_aram_data.yaml
       - rust/tools/aram-data/**
+      - rust/tools/release/**
       - rust/Cargo.lock
 
 permissions:
@@ -31,29 +30,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
 
+      - name: Build release tool
+        run: cargo build --release --manifest-path rust/Cargo.toml -p release-tool
+
       - name: Generate ARAM data snapshot
-        run: cargo run --release --manifest-path rust/Cargo.toml -p aram-data -- --output-dir app/resource/data
+        run: cargo run --release --manifest-path rust/Cargo.toml -p aram-data -- --output-dir rust/resources/data
 
       - name: Commit snapshot
         run: |
-          if git diff --quiet -- app/resource/data; then
+          if git diff --quiet -- rust/resources/data; then
             echo "ARAM data unchanged"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/resource/data
+          git add rust/resources/data
           git commit -m "chore: update ARAM data snapshot"
           pushed=0
           for attempt in 1 2 3; do
@@ -72,13 +69,8 @@ jobs:
 
       - name: Report snapshot
         run: |
-          python - <<'EOF'
-          import json
-          with open("app/resource/data/aram-manifest.json", encoding="utf-8") as stream:
-              manifest = json.load(stream)
-          print("version=%s champions=%s sha256=%s"
-                % (manifest["version"], manifest["champions"], manifest["sha256"]))
-          EOF
+          rust/target/release/release-tool aram-report \
+            --manifest rust/resources/data/aram-manifest.json
 
       - name: Publish assets to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -90,15 +82,17 @@ jobs:
           make_latest: false
           overwrite_files: true
           files: |
-            app/resource/data/AramBuff.json
-            app/resource/data/aram-manifest.json
+            rust/resources/data/AramBuff.json
+            rust/resources/data/aram-manifest.json
 
       - name: Publish assets to Gitee
-        if: env.GITEE_TOKEN != '' && env.GITEE_OWNER != '' && env.GITEE_REPO != ''
+        if: env.GITEE_TOKEN != ''
         run: |
-          pip install --quiet requests
-          python scripts/publish_gitee_assets.py \
+          rust/target/release/release-tool gitee \
             --owner "$GITEE_OWNER" \
             --repo "$GITEE_REPO" \
             --tag aram-data-latest \
-            --files app/resource/data/AramBuff.json app/resource/data/aram-manifest.json
+            --release-name "ARAM data (latest)" \
+            --release-body "Automated ARAM balance snapshot (wiki.leagueoflegends.com, CC BY-SA 3.0)." \
+            --target main \
+            --files rust/resources/data/AramBuff.json rust/resources/data/aram-manifest.json

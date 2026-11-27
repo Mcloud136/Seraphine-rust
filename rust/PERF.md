@@ -39,13 +39,7 @@
 
 ## 复测命令
 
-```powershell
-rust/app/scripts/measure_start.ps1 -Exe <exe> -ProcessName <name>
-rust/app/scripts/measure_idle_cpu.ps1 -ProcessName <name> -Seconds 20
-rust/app/scripts/measure_private.ps1 -ProcessName <name>
-$env:LOCALAPPDATA\Microsoft\WinGet\Links\presentmon.exe --process_name "League of Legends.exe" --output_stdout --v1_metrics --qpc_time_ms --session_name GameBench --stop_existing_session > frames.csv
-python rust/app/scripts/analyze_game_frames.py frames.csv "League of Legends.exe"
-```
+原始 PowerShell/Python 测量与截图脚本已归档到 `legacy-python` 分支；`main` 不再保留这些工具。复测可使用 Windows 性能计数器、任务管理器或 PresentMon 官方 CLI，按本文件口径记录启动、Working Set、CPU 与帧时间。
 
 ## 待补
 
@@ -54,10 +48,10 @@ python rust/app/scripts/analyze_game_frames.py frames.csv "League of Legends.exe
 
 ## 回归与帧时间状态（2026-11-27）
 
-- Rust workspace release：93 通过，1 忽略（OP.GG 联网测试）。
+- Rust workspace release：全部通过（含 `release-tool` 2 项；1 个 OP.GG 联网测试忽略）。
 - Tauri app 单元测试：2 通过（自动化动作选择/候选顺序）。
-- Python 契约与 Qt offscreen：93 通过，1 条件跳过，15 subtests。
+- Python/Qt 契约测试为迁移前历史证据，已随旧版归档到 `legacy-python` 分支，不在 main 运行。
 - PresentMon 2.6 Console 已安装；帧时间 A/B 的验收对象是“游戏运行时的 League of Legends.exe”，本次会话没有进行中的对局，故未采集。UI 自身的 Qt 与 WebView2 呈现路径不同，不能替代该门禁。
-- 采集工具已修正：`bench_game_frames.py` 改用 `--output_stdout` 流式写 CSV + `Ctrl+Break` 收尾（该版本 `--output_file` 不落盘），并用 `logman stop <session> -ets` 清理 ETW；硬杀 PresentMon 会残留 trace session，后续采集报 error 1450。分析脚本 `analyze_game_frames.py` 按应用名统计 p50/p95/p99/停顿。
+- 采集工具（PowerShell/Python）已归档到 `legacy-python` 分支；PresentMon 的 ETW 残留与 UTF-16 CSV 处理经验保留在本文件，main 不再保留这些脚本。
 - sidecar 内存断言按 release 口径：release `working_set=9,666,560`（9.22 MiB）/ `private=6,504,448` 通过；debug 构建 11.3 MB 超 10 MiB 为构建差异，CI 使用 `cargo test --release --workspace`。
 - 安装版（含 updater/write 插件）已再次完成静默安装、启动读取真实战绩、卸载且旧数据保留的 smoke。

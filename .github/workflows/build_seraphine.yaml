@@ -1,4 +1,4 @@
-name: Build Seraphine
+name: Build Rust app
 
 on:
   push:
@@ -7,132 +7,53 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build-seraphine:
+  build:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Install Rust
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rust/app/package-lock.json
+
+      - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install dependencies
-        uses: actions/setup-python@v4
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          python-version: '3.13'
-          cache: 'pip'
-      - name: Verify Rust workspace
-        run: |
-          cargo build --release --manifest-path .\rust\Cargo.toml -p seraphine-sidecar --bins
-          cargo fmt --manifest-path .\rust\Cargo.toml --all -- --check
-          cargo test --release --manifest-path .\rust\Cargo.toml --workspace
-          cargo clippy --manifest-path .\rust\Cargo.toml --workspace --all-targets -- -D warnings
+          workspaces: |
+            rust
+            rust/app/src-tauri
 
-      - name: Install build tools
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller==6.22.3
-          python -m compileall -q app main.py
+      - name: Install frontend dependencies
+        working-directory: rust/app
+        run: npm ci
 
-      - name: Python contract tests
-        shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          python - <<'PY'
-          import sys
-          import unittest
+      - name: Build frontend
+        working-directory: rust/app
+        run: npm run build
 
+      - name: Check Rust formatting
+        working-directory: rust
+        run: cargo fmt --all -- --check
 
-          class AnnotatingResult(unittest.TextTestResult):
-              def addFailure(self, test, err):
-                  print(f"::error title=contract-failure::{test.id()}")
-                  super().addFailure(test, err)
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test --release --workspace
 
-              def addError(self, test, err):
-                  print(f"::error title=contract-error::{test.id()}")
-                  super().addError(test, err)
+      - name: Run Rust clippy
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-
-          suite = unittest.TestLoader().discover("tests/contract")
-          result = unittest.TextTestRunner(
-              verbosity=2, resultclass=AnnotatingResult
-          ).run(suite)
-          sys.exit(0 if result.wasSuccessful() else 1)
-          PY
-
-      - name: Package Windows bundle
-        run: .\make.ps1 -dbg
-
-      - name: Package smoke
-        shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          python - <<'PY'
-          import sys
-          import traceback
-
-          sys.argv = ["package_smoke", "dist/Seraphine"]
-          try:
-              from tests.bench.package_smoke import main
-              main()
-          except BaseException:
-              lines = traceback.format_exc().strip().splitlines()
-              print("::error title=smoke-failure::" + " | ".join(lines[-4:])[:900])
-              print("\n".join(lines))
-              raise
-          PY
-          echo "SUCCESS=true" >> $GITHUB_ENV
-
-      - name: Archive bundle
-        run: 7z a Seraphine.7z .\dist\Seraphine\* -r
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        if: ${{ env.SUCCESS }} == 'true'
-        with:
-          name: Seraphine
-          path: .\Seraphine.7z
-
-  release:
-    needs: build-seraphine
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    - name: Setup environment variables
-      run: |
-        export VERSION_CHANGED_COMMIT_HASH=$(git blame app/common/config.py --root -l | grep -Po "([\w]+) (?=\(.*\) VERSION = )")
-        export HEAD_COMMIT_HASH=$(git log -1 --format='%H')
-        export UPDATED=$(python -c "import os; UPDATED = 'true' if os.environ['HEAD_COMMIT_HASH'].strip() == os.environ['VERSION_CHANGED_COMMIT_HASH'].strip() else 'false'; print(UPDATED)")
-        export VERSION=$(cat app/common/config.py | grep -Po "(?<=VERSION = \")(.*[^\"])")
-        echo "VERSION=v$VERSION" >> $GITHUB_ENV
-        echo "UPDATED=$UPDATED" >> $GITHUB_ENV
-    - name: Download artifact
-      uses: actions/download-artifact@v4
-      if: env.UPDATED == 'true'
-      with:
-        name: Seraphine
-        path: ./
-    - name: Push to release
-      uses: ncipollo/release-action@v1
-      if: env.UPDATED == 'true'
-      with:
-        name: ${{ env.VERSION }}
-        tag: ${{ env.VERSION }}
-        token: ${{ secrets.GITHUB_TOKEN }}
-        replacesArtifacts: false
-        artifacts: Seraphine.7z
-    - name: Sync to Gitee
-      if: env.UPDATED == 'true'
-      env:
-        GITEE_OWNER: Zzaphkiel
-        GITEE_REPO: seraphine
-        GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
-        GITEE_PASSWORD: ${{ secrets.GITEE_PASSWORD }}
-        GITEE_CLIENT_ID: ${{ secrets.GITEE_CLIENT_ID }}
-        GITEE_CLIENT_SECRET: ${{ secrets.GITEE_CLIENT_SECRET }}
-      run: |
-        python3 sync.py --tag "$VERSION"
+      - name: Run Tauri app tests
+        working-directory: rust/app/src-tauri
+        run: cargo test

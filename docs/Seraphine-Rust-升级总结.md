@@ -107,7 +107,7 @@ Rust 后端（seraphine-core）
 | ARAM 数据 | Python 更新器 | Rust CLI 生成、Wiki/jsdelivr 回退、sha256/大小/版本校验、Gitee feed |
 | 更新 | GitHub 更新 | 签名清单、Gitee 优先 + GitHub 回退、固定 `updater` 标签 |
 | 安装 | Python 打包 | NSIS 4.36 MB + 全中文 Inno 6.12 MB；数据目录保留 |
-| 工程 | Python 测试 | Rust workspace + Tauri app + 契约测试 + GitHub Actions + Gitee 镜像 |
+| 工程 | Python 测试 | Rust workspace + Tauri app 测试 + GitHub Actions + Gitee 镜像 |
 | 许可 | — | MIT + 中文用户协议 |
 
 ## 五、体验与国服化
@@ -154,7 +154,7 @@ Rust 后端（seraphine-core）
 ## 七、工程质量
 
 - **工作区拆分**：`seraphine-core` 业务库 + `rust/app` Tauri 工程，核心逻辑可单独测试。
-- **回归**：`cargo test --release --workspace`、Tauri app 单测、Python 契约测试全绿；`Build Seraphine` CI 通过。
+- **回归**：`cargo test --release --workspace`、Tauri app 单测全绿；`Build Rust app` CI 通过。main 不再包含 Python 测试或 PowerShell 脚本。
 - **发布**：GitHub Actions 构建签名 NSIS + 中文 Inno，发布 GitHub Release 与 Gitee Release；`v2.0.2` 已上线。
 - **可复现**：2.0.0 已用全新克隆 `npm ci` → `npx tauri build` 验证签名产物，静默安装/卸载 smoke 通过且用户数据保留；2.0.2 沿用同一构建与发布链。
 - **许可**：MIT + 中文用户协议。
@@ -164,7 +164,7 @@ Rust 后端（seraphine-core）
 - **总内存**：Tauri 多进程模型会把一部分内存放到 WebView2；主进程更轻，但进程树总内存高于 Python 版。需要按“主进程/进程树”两种口径分别展示。
 - **i18n**：当前中文优先；英文/葡萄牙语尚未接入。
 - **目标机复测**：PresentMon 目前在本机 i9-14900HX 完成同局 A/B；Intel 250KF 的复测仍待执行。
-- **Python 回退**：Python 版与 sidecar 暂时保留；用户逐模式自测通过后再退役。
+- **Python 旧版**：已归档在 GitHub `legacy-python` 分支；main 只维护 Rust/Tauri 与 Rust 发布工具。
 - **真机细节**：选人/大乱斗部分字段仍在按真机核对表迭代（见 [PARITY.md](../rust/PARITY.md)）。
 
 ## 九、证据索引

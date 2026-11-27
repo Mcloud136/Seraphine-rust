@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::error::CoreError;
 use crate::paths::AppPaths;
 
-const BUNDLED_DATA: &str = include_str!("../../../../app/resource/data/AramBuff.json");
+const BUNDLED_DATA: &str = include_str!("../../../resources/data/AramBuff.json");
 const MIN_CHAMPIONS: usize = 100;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_DATA_BYTES: usize = 2 * 1024 * 1024;
