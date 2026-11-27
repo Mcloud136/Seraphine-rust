@@ -79,6 +79,8 @@ jobs:
           path: |
             rust/app/src-tauri/target/release/bundle/nsis/*.exe
             rust/app/src-tauri/target/release/bundle/nsis/*.sig
+            app/resource/data/AramBuff.json
+            app/resource/data/aram-manifest.json
             latest.json
 
       - name: Publish release
@@ -92,4 +94,6 @@ jobs:
           files: |
             rust/app/src-tauri/target/release/bundle/nsis/*.exe
             rust/app/src-tauri/target/release/bundle/nsis/*.sig
+            app/resource/data/AramBuff.json
+            app/resource/data/aram-manifest.json
             latest.json

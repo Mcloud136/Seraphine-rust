@@ -86,7 +86,7 @@ Consequences: 灰度运行需显式环境变量与真机确认；失败或结果
 
 Status: accepted (2026-11-27)
 Context: Wiki 的 Module:ChampionData/data 对非浏览器客户端可能返回 Cloudflare 403；应用内热更新需要一个稳定、可校验的 feed。
-Decision: 生成器实现为 Rust CLI（`rust/tools/aram-data`），以 Wiki 为主源，解析 Lua 表（含 `[1]=` 数字键与算术表达式）；403 等失败时回退到 jsdelivr 上 `balance-buff-viewer-plugin` 的预解析 `balance.json`（MIT，同 Wiki 数据）。Python 脚本保留作参考与 Gitee 发布步骤。CI 每次生成后把 `AramBuff.json` 与 `aram-manifest.json` 发布到当前仓库固定标签 `aram-data-latest`（内置 `GITHUB_TOKEN`），并提供 sha256/大小/版本校验。应用侧 feed 地址保持“按需配置”，避免首次启动依赖外网。
+Decision: 生成器实现为 Rust CLI（`rust/tools/aram-data`），以 Wiki 为主源，解析 Lua 表（含 `[1]=` 数字键与算术表达式）；403 等失败时回退到 jsdelivr 上 `balance-buff-viewer-plugin` 的预解析 `balance.json`（MIT，同 Wiki 数据）。Python 脚本保留作参考与 Gitee 发布步骤。CI 每次生成后把 `AramBuff.json` 与 `aram-manifest.json` 发布到当前仓库固定标签 `aram-data-latest`（内置 `GITHUB_TOKEN`），并提供 sha256/大小/版本校验。应用侧 feed 默认指向本仓库固定标签 `aram-data-latest`（设置中可覆盖或清空）。
 Consequences: 数据更新不再依赖已停放的 jddld；GitHub runner 可直连 Wiki，本机被拦截时走回退源且与内置快照逐字段一致；固定标签下载 URL 长期稳定。
 
 ## ADR-013: 更新签名密钥由本地保管

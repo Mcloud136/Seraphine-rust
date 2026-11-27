@@ -8,6 +8,8 @@ use crate::paths::AppPaths;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_WORKSPACE: &str = "app";
+pub const DEFAULT_ARAM_FEED_URL: &str =
+    "https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -191,7 +193,7 @@ impl Default for FunctionConfig {
         Self {
             api_concurrency_number: default_api_concurrency(),
             aram_data_auto_update: true,
-            aram_data_feed_url: String::new(),
+            aram_data_feed_url: DEFAULT_ARAM_FEED_URL.to_string(),
             auto_accept_ceil_swap: false,
             auto_accept_champ_trade: false,
             auto_accept_matching_delay: 0,

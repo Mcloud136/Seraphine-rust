@@ -117,7 +117,9 @@ class Config(QConfig):
     aramDataAutoUpdate = ConfigItem(
         "Functions", "AramDataAutoUpdate", True, BoolValidator())
     aramDataFeedUrl = ConfigItem(
-        "Functions", "AramDataFeedUrl", "")
+        "Functions", "AramDataFeedUrl",
+        "https://github.com/Mcloud136/Seraphine-rust/releases/download/"
+        "aram-data-latest/aram-manifest.json")
 
     autoAcceptMatchingDelay = RangeConfigItem(
         "Functions", "AutoAcceptMatchingDelay", 0, RangeValidator(0, 11))
