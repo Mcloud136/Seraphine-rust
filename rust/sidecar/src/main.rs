@@ -3013,8 +3013,8 @@ impl NetworkSnapshot {
         loop {
             match self.opgg_cache.start(&url) {
                 Start::Cached(value) => return Ok(value),
-                Start::Wait(notify) => {
-                    notify.notified().await;
+                Start::Wait(mut receiver) => {
+                    let _ = receiver.changed().await;
                 }
                 Start::Leader => break,
             }

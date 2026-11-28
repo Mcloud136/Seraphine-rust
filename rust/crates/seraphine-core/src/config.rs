@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use crate::error::CoreError;
@@ -16,6 +17,7 @@ const LEGACY_ARAM_FEED_URL: &str =
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(default)]
     pub schema_version: u32,
     #[serde(default)]
     pub migrated_from: Option<String>,
@@ -394,12 +396,30 @@ impl ConfigStore {
     pub fn load(paths: &AppPaths) -> Result<Self, CoreError> {
         paths.ensure().map_err(CoreError::io)?;
         let path = paths.config_file();
+        let mut corrupt = false;
         if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(config) = serde_json::from_slice::<AppConfig>(&bytes) {
-                return Ok(Self {
-                    path,
-                    inner: RwLock::new(normalize(config)),
-                });
+            match serde_json::from_slice::<AppConfig>(&bytes) {
+                Ok(config) => {
+                    return Ok(Self {
+                        path,
+                        inner: RwLock::new(normalize(config)),
+                    });
+                }
+                Err(error) => {
+                    log::warn!("failed to parse config {}: {error}", path.display());
+                    match backup_corrupt(&path) {
+                        Ok(backup) => {
+                            log::warn!("backed up corrupt config to {}", backup.display());
+                            corrupt = true;
+                        }
+                        Err(backup_error) => {
+                            log::error!(
+                                "failed to back up corrupt config {}: {backup_error}",
+                                path.display()
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -418,7 +438,8 @@ impl ConfigStore {
             path,
             inner: RwLock::new(normalize(config)),
         };
-        if migrated.is_some() {
+        // Only write defaults when the corrupt file was safely moved aside.
+        if migrated.is_some() || corrupt {
             store.save_current()?;
         }
         Ok(store)
@@ -486,6 +507,16 @@ impl ConfigStore {
         seraphine_platform::atomic_replace_file(&temporary, &self.path).map_err(CoreError::io)?;
         Ok(())
     }
+}
+
+fn backup_corrupt(path: &Path) -> Result<PathBuf, std::io::Error> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    let backup = path.with_file_name(format!("config.json.corrupt-{stamp}"));
+    std::fs::rename(path, &backup)?;
+    Ok(backup)
 }
 
 fn normalize(mut config: AppConfig) -> AppConfig {
@@ -962,6 +993,35 @@ mod tests {
             updated.personalization.dpi_scale,
             AppConfig::default().personalization.dpi_scale
         );
+    }
+
+    #[test]
+    fn backs_up_corrupt_config_instead_of_overwriting_it() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("seraphine-config-test-{stamp}"));
+        let paths = AppPaths {
+            legacy_data: root.join("legacy"),
+            local: root.join("local"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+            catalog: root.join("catalog"),
+        };
+        std::fs::create_dir_all(&paths.state).unwrap();
+        let config_path = paths.config_file();
+        std::fs::write(&config_path, b"{ this is not json").unwrap();
+        let store = ConfigStore::load(&paths).unwrap();
+        assert_eq!(store.peek().unwrap().schema_version, SCHEMA_VERSION);
+        let backups = std::fs::read_dir(&paths.state)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("config.json.corrupt-"))
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

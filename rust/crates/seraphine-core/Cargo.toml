@@ -9,6 +9,7 @@ license.workspace = true
 async-trait = "0.1"
 base64 = "0.22"
 futures-util = "0.3"
+log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["native-tls", "stream"] }
 seraphine-automation = { path = "../automation" }
 seraphine-domain = { path = "../domain" }

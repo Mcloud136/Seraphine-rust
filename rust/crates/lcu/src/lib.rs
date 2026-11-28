@@ -109,9 +109,8 @@ impl LcuClient {
         loop {
             match self.cache.start(&key) {
                 Start::Cached(value) => return Ok(value),
-                Start::Wait(notify) => {
-                    let notified = notify.notified();
-                    notified.await;
+                Start::Wait(mut receiver) => {
+                    let _ = receiver.changed().await;
                 }
                 Start::Leader => break,
             }

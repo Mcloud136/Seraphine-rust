@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 const MAX_CACHE_ENTRIES: usize = 64;
 const MAX_CACHE_BYTES: usize = 2 * 1024 * 1024;
@@ -46,7 +46,7 @@ struct CacheEntry {
 pub enum Start {
     Cached(Value),
     Leader,
-    Wait(Arc<Notify>),
+    Wait(watch::Receiver<u64>),
 }
 
 pub struct CacheFlight {
@@ -80,7 +80,7 @@ impl Drop for CacheFlight {
 #[derive(Default)]
 pub struct JsonCache {
     values: Mutex<HashMap<String, CacheEntry>>,
-    inflight: Mutex<HashMap<String, Arc<Notify>>>,
+    inflight: Mutex<HashMap<String, watch::Sender<u64>>>,
     counters: CacheCounters,
 }
 
@@ -118,11 +118,12 @@ impl JsonCache {
             .inflight
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some(notify) = inflight.get(key) {
+        if let Some(sender) = inflight.get(key) {
             self.counters.record_coalesced();
-            return Start::Wait(Arc::clone(notify));
+            return Start::Wait(sender.subscribe());
         }
-        inflight.insert(key.to_string(), Arc::new(Notify::new()));
+        let (sender, _) = watch::channel(0u64);
+        inflight.insert(key.to_string(), sender);
         Start::Leader
     }
 
@@ -157,15 +158,15 @@ impl JsonCache {
     }
 
     fn finish(&self, key: &str) {
-        let notify = {
+        let sender = {
             let mut inflight = self
                 .inflight
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             inflight.remove(key)
         };
-        if let Some(notify) = notify {
-            notify.notify_waiters();
+        if let Some(sender) = sender {
+            let _ = sender.send(1);
         }
     }
 }
@@ -192,6 +193,22 @@ mod tests {
     fn match_details_use_long_ttl() {
         assert!(JsonCache::ttl_for("/lol-match-history/v1/games/123") > Duration::from_secs(60));
         assert!(JsonCache::ttl_for("/lol-gameflow/v1/gameflow-phase") < Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn waiter_is_woken_by_completion() {
+        let cache = JsonCache::default();
+        assert!(matches!(cache.start("key"), Start::Leader));
+        let mut receiver = match cache.start("key") {
+            Start::Wait(receiver) => receiver,
+            _ => panic!("expected waiter"),
+        };
+        cache.complete("key", json!({"ok": true}), 12, Duration::from_secs(1));
+        tokio::time::timeout(Duration::from_secs(1), receiver.changed())
+            .await
+            .expect("waiter should be woken")
+            .expect("watch should remain open until delivery");
+        assert!(matches!(cache.start("key"), Start::Cached(_)));
     }
 
     #[tokio::test]

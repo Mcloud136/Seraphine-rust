@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,13 +15,39 @@ use crate::session::SessionManager;
 
 const CHAMP_SELECT_SESSION: &str = "/lol-champ-select/v1/session";
 const GUARD_RETENTION_SECONDS: u64 = 30 * 24 * 3600;
+const PENDING_TIMEOUT_SECONDS: u64 = 120;
 const MAX_GUARDS: usize = 256;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct GuardRecord {
     request_hash: String,
     completed: bool,
+    #[serde(default)]
+    pending: bool,
     updated_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardStatus {
+    Pending,
+    Completed,
+    Unknown,
+}
+
+impl GuardRecord {
+    fn status(&self, now: u64) -> GuardStatus {
+        if self.pending {
+            if now.saturating_sub(self.updated_at) <= PENDING_TIMEOUT_SECONDS {
+                GuardStatus::Pending
+            } else {
+                GuardStatus::Unknown
+            }
+        } else if self.completed {
+            GuardStatus::Completed
+        } else {
+            GuardStatus::Unknown
+        }
+    }
 }
 
 pub struct WriteService {
@@ -41,6 +67,13 @@ impl WriteService {
         guards.retain(|_, record| {
             !record.completed || now.saturating_sub(record.updated_at) < GUARD_RETENTION_SECONDS
         });
+        // A pending record cannot have a live owner after a restart. Keep it
+        // as unknown so the same operation id is never written blindly.
+        for record in guards.values_mut() {
+            if record.pending {
+                record.pending = false;
+            }
+        }
         Self {
             session,
             guards: Mutex::new(guards),
@@ -87,21 +120,28 @@ impl WriteService {
                         "operation id was used for a different request".into(),
                     ));
                 }
-                if record.completed {
-                    return Ok(json!({
-                        "replayed": true,
-                        "state": "completed",
-                        "data": Value::Null,
-                    }));
+                match record.status(now) {
+                    GuardStatus::Completed => {
+                        return Ok(json!({
+                            "replayed": true,
+                            "state": "completed",
+                            "data": Value::Null,
+                        }));
+                    }
+                    GuardStatus::Pending => {
+                        return Err(CoreError::Deferred("write is in progress".into()));
+                    }
+                    GuardStatus::Unknown => {
+                        return Err(CoreError::OutcomeUnknown(
+                            "previous write outcome is unknown; inspect the client state".into(),
+                        ));
+                    }
                 }
-                return Err(CoreError::OutcomeUnknown(
-                    "previous write outcome is unknown; inspect the client state".into(),
-                ));
             }
             if guards.len() >= MAX_GUARDS {
                 if let Some(oldest) = guards
                     .iter()
-                    .filter(|(_, record)| record.completed)
+                    .filter(|(_, record)| record.status(now) == GuardStatus::Completed)
                     .min_by_key(|(_, record)| record.updated_at)
                     .map(|(key, _)| key.clone())
                 {
@@ -110,14 +150,41 @@ impl WriteService {
                     return Err(CoreError::Deferred("write guard capacity reached".into()));
                 }
             }
+            guards.insert(
+                key.clone(),
+                GuardRecord {
+                    request_hash: request_hash.clone(),
+                    completed: false,
+                    pending: true,
+                    updated_at: now,
+                },
+            );
+            if let Err(error) = persist_locked(&self.path, &guards) {
+                guards.remove(&key);
+                return Err(error);
+            }
         }
 
-        let lcu = self.session.lcu().await.ok_or(CoreError::NotConnected)?;
+        let lcu = match self.session.lcu().await {
+            Some(lcu) => lcu,
+            None => {
+                self.remove_guard(&key);
+                return Err(CoreError::NotConnected);
+            }
+        };
         let guarded = path.starts_with(CHAMP_SELECT_SESSION);
         if guarded {
-            let session = self.session.lcu_get_fresh(CHAMP_SELECT_SESSION).await?;
-            validate_write(&session, path, data.as_ref())
-                .map_err(|error| CoreError::InvalidState(error.as_str().to_string()))?;
+            let session = match self.session.lcu_get_fresh(CHAMP_SELECT_SESSION).await {
+                Ok(session) => session,
+                Err(error) => {
+                    self.remove_guard(&key);
+                    return Err(error);
+                }
+            };
+            if let Err(error) = validate_write(&session, path, data.as_ref()) {
+                self.remove_guard(&key);
+                return Err(CoreError::InvalidState(error.as_str().to_string()));
+            }
         }
 
         let result = execute_http(&lcu, &method, path, data.clone()).await;
@@ -135,7 +202,7 @@ impl WriteService {
             match confirmation {
                 Ok(()) => {
                     let confirmed_after_error = result.is_err();
-                    self.store(&key, &request_hash, true, now);
+                    self.update_guard(&key, &request_hash, true, false, now);
                     let mut response = match result {
                         Ok(value) => value,
                         Err(error) => json!({ "writeError": error.to_string() }),
@@ -148,7 +215,7 @@ impl WriteService {
                     return Ok(response);
                 }
                 Err(error) => {
-                    self.store(&key, &request_hash, false, now);
+                    self.update_guard(&key, &request_hash, false, false, now);
                     let detail = match &result {
                         Ok(_) => String::new(),
                         Err(error) => format!("; request error: {error}"),
@@ -162,18 +229,21 @@ impl WriteService {
 
         match result {
             Ok(value) => {
-                self.store(&key, &request_hash, true, now);
+                self.update_guard(&key, &request_hash, true, false, now);
                 Ok(json!({
                     "replayed": false,
                     "state": "completed",
                     "data": value,
                 }))
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                self.remove_guard(&key);
+                Err(error)
+            }
         }
     }
 
-    fn store(&self, key: &str, hash: &str, completed: bool, now: u64) {
+    fn update_guard(&self, key: &str, hash: &str, completed: bool, pending: bool, now: u64) {
         let Ok(mut guards) = self.guards.lock() else {
             return;
         };
@@ -182,18 +252,34 @@ impl WriteService {
             GuardRecord {
                 request_hash: hash.to_string(),
                 completed,
+                pending,
                 updated_at: now,
             },
         );
-        let payload = serde_json::to_vec_pretty(&*guards).unwrap_or_default();
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let temporary = self.path.with_extension("json.tmp");
-        if std::fs::write(&temporary, payload).is_ok() {
-            let _ = seraphine_platform::atomic_replace_file(&temporary, &self.path);
+        if let Err(error) = persist_locked(&self.path, &guards) {
+            log::warn!("failed to persist write guard: {error}");
         }
     }
+
+    fn remove_guard(&self, key: &str) {
+        let Ok(mut guards) = self.guards.lock() else {
+            return;
+        };
+        guards.remove(key);
+        if let Err(error) = persist_locked(&self.path, &guards) {
+            log::warn!("failed to persist write guard removal: {error}");
+        }
+    }
+}
+
+fn persist_locked(path: &Path, guards: &HashMap<String, GuardRecord>) -> Result<(), CoreError> {
+    let payload = serde_json::to_vec_pretty(guards).map_err(CoreError::json)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(CoreError::io)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, payload).map_err(CoreError::io)?;
+    seraphine_platform::atomic_replace_file(&temporary, path).map_err(CoreError::io)
 }
 
 fn request_hash(method: &str, path: &str, data: Option<&Value>) -> String {
@@ -328,5 +414,23 @@ mod tests {
         let third = request_hash("PATCH", "/x", Some(&json!({"a": 2})));
         assert_eq!(first, second);
         assert_ne!(first, third);
+    }
+
+    #[test]
+    fn guard_status_distinguishes_pending_completed_and_unknown() {
+        let now = 1_000;
+        let record = |completed, pending, updated_at| GuardRecord {
+            request_hash: "hash".into(),
+            completed,
+            pending,
+            updated_at,
+        };
+        assert_eq!(record(false, true, now).status(now), GuardStatus::Pending);
+        assert_eq!(
+            record(false, true, now).status(now + PENDING_TIMEOUT_SECONDS + 1),
+            GuardStatus::Unknown
+        );
+        assert_eq!(record(true, false, now).status(now), GuardStatus::Completed);
+        assert_eq!(record(false, false, now).status(now), GuardStatus::Unknown);
     }
 }
