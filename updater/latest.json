@@ -2,10 +2,10 @@
   "notes": "Seraphine Rust 2.0.3",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSmpKQmlzbmw5Umk2L0hjL0RDRTdwbjlNemc4S3lXbWxxekFiUmNNcnd4UUVFc3QvVE5aWkkzeTVFN0ROTEcrRVJ6eEhkdWZTSm5rSVk4VFJYS2UrOGh3VlBCaDRjYWdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQ0NzEwCWZpbGU6U2VyYXBoaW5lIFJ1c3RfMi4wLjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjIuMC4zCm9jWjg2UFc3aW1KZFpyWnVtUmN5dSszaW5tVWFlMm5UOTR2b3VmbWVCVDAwdFY1WXl3cVdCa3QwY3VLem9vVElQcC9KVmVYK1ZleXhzOW1tUC8yZ0RBPT0K",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSmpKQmlzbmw5UmliMnZneHh3S2svYko1djZOdjBtamVnMHhVandPYVZLRkNlRXBDZE0yWFNMZERBYXUxYmNONC8xV2Rtck1PSkNjUHVZMzhsK1JSdWQ2MmwzYTg2eUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODQ2MTc4CWZpbGU6U2VyYXBoaW5lIFJ1c3RfMi4wLjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjIuMC4zCkZSRXJnZ0V3UTlQNTkrc0Y1V3RqVWxmMXRiKzk1V0I0cVZDcGlLY2xhbCttZWFUZDU4eGlxYmx2SGpDS21Ta0ZsZHpNUlNYVUpvcUNGMUIrUlFhT0FnPT0K",
       "url": "https://gitee.com/wxbns/seraphine-rust/releases/download/v2.0.3/Seraphine.Rust_2.0.3_x64-setup.exe"
     }
   },
-  "pub_date": "2026-11-28T05:45:14Z",
+  "pub_date": "2026-11-28T06:09:43Z",
   "version": "2.0.3"
 }
