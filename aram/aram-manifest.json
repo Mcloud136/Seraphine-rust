@@ -2,9 +2,9 @@
   "champions": 132,
   "file": "AramBuff.json",
   "gameVersion": "16.23",
-  "generatedAt": "2026-11-28T04:33:46Z",
+  "generatedAt": "2026-11-28T05:36:16Z",
   "schema": 1,
-  "sha256": "f2f2a71468ca70555d702c6e192b3c1bb99433c3e565564c907354918e8ea6e0",
+  "sha256": "fd7e9979cbd934716e4e0024bdeb187bbd104cbb7bc2262e90d21eb9ce5f51c2",
   "size": 21488,
   "source": "wiki.leagueoflegends.com Module:ChampionData/data",
   "version": "16.23.1"
