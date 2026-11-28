@@ -187,9 +187,28 @@ jobs:
         if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
         shell: bash
         run: |
-          GIT_TERMINAL_PROMPT=0 git push \
-            "https://wxbns:${GITEE_TOKEN}@gitee.com/wxbns/seraphine-rust.git" \
-            "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          remote="https://wxbns:${GITEE_TOKEN}@gitee.com/wxbns/seraphine-rust.git"
+          local_sha=$(git rev-parse "refs/tags/${GITHUB_REF_NAME}")
+          for attempt in 1 2 3; do
+            remote_sha=$(GIT_TERMINAL_PROMPT=0 git ls-remote "$remote" \
+              "refs/tags/${GITHUB_REF_NAME}" | cut -f1)
+            if [ "$remote_sha" = "$local_sha" ]; then
+              echo "Gitee tag already at $local_sha"
+              exit 0
+            fi
+            force=""
+            if [ -n "$remote_sha" ]; then
+              echo "Moving Gitee tag $remote_sha -> $local_sha"
+              force="--force"
+            fi
+            if GIT_TERMINAL_PROMPT=0 git push $force "$remote" \
+              "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "tag sync attempt $attempt failed; retrying"
+            sleep 3
+          done
+          exit 1
 
       - name: Publish app release to Gitee
         if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
