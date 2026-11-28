@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -19,6 +19,7 @@ import {
 import { AssetImage } from "./AssetImage";
 import { formatDuration, formatTime, rankText, winRate } from "./format";
 import { friendlyError } from "./errors";
+import { useCatalogRefresh } from "./useCatalogRefresh";
 
 interface Summoner {
   gameName?: string;
@@ -336,14 +337,19 @@ export default function SearchPage({
   const summonerName =
     player?.summoner.gameName ?? player?.summoner.displayName ?? "";
 
-  async function loadCatalog() {
-    if (Object.keys(catalog).length > 0) return;
-    try {
-      setCatalog(await invoke<CatalogData>("catalog_get"));
-    } catch {
-      setCatalog({});
-    }
-  }
+  const loadCatalog = useCallback(
+    async (force = false) => {
+      if (!force && Object.keys(catalog).length > 0) return;
+      try {
+        setCatalog(await invoke<CatalogData>("catalog_get"));
+      } catch {
+        setCatalog({});
+      }
+    },
+    [catalog],
+  );
+
+  useCatalogRefresh(useCallback(() => loadCatalog(true), [loadCatalog]));
 
   async function runSearch(text: string, gameId?: number) {
     if (!connected || !text) return;

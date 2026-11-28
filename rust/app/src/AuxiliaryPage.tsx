@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import { SkinPickerDialog, type SkinItem } from "./SkinPickerDialog";
 import { friendlyError } from "./errors";
 import { CHAMPION_KEYWORDS } from "./championAliases";
+import { useCatalogRefresh } from "./useCatalogRefresh";
 import {
   Button,
   Caption1,
@@ -108,7 +109,6 @@ export default function AuxiliaryPage({
   const [signatureOn, setSignatureOn] = useState(false);
   const [picker, setPicker] = useState<{
     title: string;
-    items: PickerItem[];
     selected: number[];
     multiple: boolean;
     onConfirm: (ids: number[]) => void;
@@ -149,11 +149,27 @@ export default function AuxiliaryPage({
     }
   }
 
-  useEffect(() => {
-    void invoke<{ champions?: Record<string, string> }>("catalog_get")
-      .then((catalog) => setChampions(catalog.champions ?? {}))
-      .catch(() => undefined);
+  const loadCatalog = useCallback(async () => {
+    try {
+      const catalog = await invoke<{ champions?: Record<string, string> }>(
+        "catalog_get",
+      );
+      setChampions(catalog.champions ?? {});
+    } catch {
+      // Keep the previous snapshot; a later catalog refresh retries.
+    }
   }, []);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  useCatalogRefresh(loadCatalog);
+
+  const championsRef = useRef(champions);
+  useEffect(() => {
+    championsRef.current = champions;
+  }, [champions]);
 
   const championItems = useMemo<PickerItem[]>(
     () =>
@@ -371,18 +387,18 @@ export default function AuxiliaryPage({
           </Button>          <Field label="背景皮肤">
             <Button
               appearance="secondary"
-              onClick={() =>
+              onClick={() => {
+                void loadCatalog();
                 setPicker({
                   title: "选择英雄",
-                  items: championItems,
                   selected: [],
                   multiple: false,
                   onConfirm: (ids) => {
-                    const name = champions[String(ids[0])];
+                    const name = championsRef.current[String(ids[0])];
                     if (name) void loadSkins(name);
                   },
-                })
-              }
+                });
+              }}
             >
               {chosenChampion
                 ? `${chosenChampion}${chosenSkin ? ` · ${chosenSkin}` : ""}`
@@ -610,7 +626,7 @@ export default function AuxiliaryPage({
         <IconPickerDialog
           open
           title={picker.title}
-          items={picker.items}
+          items={championItems}
           selected={picker.selected}
           multiple={picker.multiple}
           onConfirm={picker.onConfirm}

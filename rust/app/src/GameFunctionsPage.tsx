@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -21,6 +21,7 @@ import { IconPickerDialog, type PickerItem } from "./IconPickerDialog";
 import { friendlyError } from "./errors";
 import { CHAMPION_KEYWORDS } from "./championAliases";
 import type { AppConfig, FunctionConfig } from "./config";
+import { useCatalogRefresh } from "./useCatalogRefresh";
 
 const useStyles = makeStyles({
   page: { display: "flex", flexDirection: "column", gap: "12px" },
@@ -129,7 +130,7 @@ export default function GameFunctionsPage({
   >({});
   const [picker, setPicker] = useState<{
     title: string;
-    items: PickerItem[];
+    kind: "champion" | "spell";
     selected: number[];
     multiple: boolean;
     onConfirm: (ids: number[]) => void;
@@ -144,17 +145,24 @@ export default function GameFunctionsPage({
     });
   }, [config]);
 
-  useEffect(() => {
-    void invoke<{
-      champions?: Record<string, string>;
-      spells?: Record<string, { name?: string; iconPath?: string }>;
-    }>("catalog_get")
-      .then((catalog) => {
-        setChampions(catalog.champions ?? {});
-        setSpells(catalog.spells ?? {});
-      })
-      .catch(() => undefined);
+  const loadCatalog = useCallback(async () => {
+    try {
+      const catalog = await invoke<{
+        champions?: Record<string, string>;
+        spells?: Record<string, { name?: string; iconPath?: string }>;
+      }>("catalog_get");
+      setChampions(catalog.champions ?? {});
+      setSpells(catalog.spells ?? {});
+    } catch {
+      // Keep the previous snapshot; a later catalog refresh retries.
+    }
   }, []);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  useCatalogRefresh(loadCatalog);
 
   const championItems = useMemo<PickerItem[]>(
     () =>
@@ -246,16 +254,17 @@ export default function GameFunctionsPage({
         </div>
         <Button
           appearance="secondary"
-          onClick={() =>
+          onClick={() => {
+            void loadCatalog();
             setPicker({
               title: "选择英雄",
-              items: championItems,
+              kind: "champion",
               selected: values,
               multiple: true,
               onConfirm: (ids) =>
                 update(listKey as keyof FunctionConfig, ids as never),
-            })
-          }
+            });
+          }}
         >
           选择英雄…
         </Button>
@@ -429,10 +438,11 @@ export default function GameFunctionsPage({
                       title={empty ? "未选择" : spell?.name}
                     />
                   }
-                  onClick={() =>
+                  onClick={() => {
+                    void loadCatalog();
                     setPicker({
                       title: `选择召唤师技能（${index === 0 ? "D" : "F"}）`,
-                      items: spellItems,
+                      kind: "spell",
                       selected: [spellId],
                       multiple: false,
                       onConfirm: (ids) => {
@@ -444,8 +454,8 @@ export default function GameFunctionsPage({
                         next[index] = ids[0];
                         update(spellKey as keyof FunctionConfig, next as never);
                       },
-                    })
-                  }
+                    });
+                  }}
                 >
                   {empty ? "未选择" : spell?.name}
                 </Button>
@@ -462,7 +472,7 @@ export default function GameFunctionsPage({
         <IconPickerDialog
           open
           title={picker.title}
-          items={picker.items}
+          items={picker.kind === "champion" ? championItems : spellItems}
           selected={picker.selected}
           multiple={picker.multiple}
           onConfirm={picker.onConfirm}

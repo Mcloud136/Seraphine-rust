@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { friendlyError } from "./errors";
 import {
@@ -15,6 +15,7 @@ import {
   tokens,
 } from "@fluentui/react-components";
 import { AssetImage } from "./AssetImage";
+import { useCatalogRefresh } from "./useCatalogRefresh";
 
 interface RankEntry {
   tier?: string;
@@ -568,18 +569,25 @@ export default function GameInfoPage({
     };
   }, [connected, reserveGameInfo, refreshTick]);
 
+  const loadCatalog = useCallback(async () => {
+    try {
+      const catalog = await invoke<{
+        champions?: Record<string, string>;
+        items?: Record<string, { iconPath?: string }>;
+      }>("catalog_get");
+      setChampions(catalog.champions ?? {});
+      setItems(catalog.items ?? {});
+    } catch {
+      // Keep the previous snapshot; a later catalog refresh retries.
+    }
+  }, []);
+
   useEffect(() => {
     if (!connected) return;
-    void invoke<{
-      champions?: Record<string, string>;
-      items?: Record<string, { iconPath?: string }>;
-    }>("catalog_get")
-      .then((catalog) => {
-        setChampions(catalog.champions ?? {});
-        setItems(catalog.items ?? {});
-      })
-      .catch(() => undefined);
-  }, [connected]);
+    void loadCatalog();
+  }, [connected, loadCatalog]);
+
+  useCatalogRefresh(loadCatalog);
 
   const payload = side === "ally" ? ally : enemy;
   const summoners = payload?.summoners ?? [];

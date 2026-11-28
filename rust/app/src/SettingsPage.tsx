@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { friendlyError } from "./errors";
+import { useCatalogRefresh } from "./useCatalogRefresh";
 import {
   Badge,
   Button,
@@ -171,11 +172,22 @@ export default function SettingsPage({
       .catch(() => undefined);
   }, []);
 
-  useEffect(() => {
-    void invoke<{ queues?: Record<string, { name?: string }> }>("catalog_get")
-      .then((catalog) => setQueues(catalog.queues ?? {}))
-      .catch(() => undefined);
+  const loadQueues = useCallback(async () => {
+    try {
+      const catalog = await invoke<{
+        queues?: Record<string, { name?: string }>;
+      }>("catalog_get");
+      setQueues(catalog.queues ?? {});
+    } catch {
+      // Keep the previous snapshot; a later catalog refresh retries.
+    }
   }, []);
+
+  useEffect(() => {
+    void loadQueues();
+  }, [loadQueues]);
+
+  useCatalogRefresh(loadQueues);
 
   useEffect(() => {
     setDraft(config);
