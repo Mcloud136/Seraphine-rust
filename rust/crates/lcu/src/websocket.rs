@@ -313,21 +313,26 @@ pub async fn run_websocket(
             tokio::select! {
                 _ = shutdown.recv() => return,
                 message = socket.next() => {
-                    let Some(Ok(Message::Text(text))) = message else {
-                        break;
-                    };
-                    let Some((source_seq, mut event)) = parse_event(&text) else {
-                        continue;
-                    };
-                    if let Some(source_seq) = source_seq {
-                        if !accept_source_seq(&mut last_source_seq, Some(source_seq)) {
-                            continue;
+                    match message {
+                        Some(Ok(Message::Text(text))) => {
+                            let Some((source_seq, mut event)) = parse_event(&text) else {
+                                continue;
+                            };
+                            if let Some(source_seq) = source_seq {
+                                if !accept_source_seq(&mut last_source_seq, Some(source_seq)) {
+                                    continue;
+                                }
+                            }
+                            event.seq = sequence.fetch_add(1, Ordering::Relaxed);
+                            stats.received.fetch_add(1, Ordering::Relaxed);
+                            update_scheduler(&event, &scheduler);
+                            emit(&sender, event, &stats);
                         }
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        // Ping/Pong are handled by tungstenite; binary frames
+                        // are not LCU events. Keep the connection alive.
+                        _ => continue,
                     }
-                    event.seq = sequence.fetch_add(1, Ordering::Relaxed);
-                    stats.received.fetch_add(1, Ordering::Relaxed);
-                    update_scheduler(&event, &scheduler);
-                    emit(&sender, event, &stats);
                 }
             }
         }

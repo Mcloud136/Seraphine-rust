@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use serde_json::{json, Value};
 use tauri::Manager;
 
@@ -6,10 +8,13 @@ use seraphine_core::CoreError;
 
 use crate::AppState;
 
+const LOCK_LEAD_MS: i64 = 4_000;
+
 #[derive(Default)]
 pub struct AutomationState {
     active: bool,
     token: String,
+    draft_id: Option<u64>,
     spells_done: bool,
     ban_done: bool,
     pick_done: bool,
@@ -18,6 +23,7 @@ pub struct AutomationState {
     ban_attempt: u32,
     pick_attempt: u32,
     complete_attempt: u32,
+    ban_ready_at: Option<Instant>,
 }
 
 pub fn begin(app: &tauri::AppHandle, _epoch: u64, _seq: u64) {
@@ -36,7 +42,7 @@ pub fn reset(app: &tauri::AppHandle) {
     let Ok(mut automation) = state.automation.lock() else {
         return;
     };
-    automation.active = false;
+    *automation = AutomationState::default();
 }
 
 pub async fn on_champ_select(app: tauri::AppHandle, epoch: u64, _seq: u64, data: Value) {
@@ -44,25 +50,32 @@ pub async fn on_champ_select(app: tauri::AppHandle, epoch: u64, _seq: u64, data:
     let _serial = state.automation_lock.lock().await;
     let config = state.config.snapshot().await;
     let functions = &config.functions;
+    let session = data;
+    let draft_id = session.get("gameId").and_then(Value::as_u64);
     let token = {
         let Ok(mut automation) = state.automation.lock() else {
             return;
         };
-        if !automation.active {
-            automation.active = true;
+        let new_draft = !automation.active
+            || draft_id.is_some_and(|draft_id| automation.draft_id != Some(draft_id));
+        if new_draft {
+            *automation = AutomationState {
+                active: true,
+                draft_id,
+                ..AutomationState::default()
+            };
         }
         if automation.token.is_empty() {
             // Guard keys are persisted per client pid; epoch:seq repeats across
             // drafts, so a per-draft nonce keeps operation ids unique.
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_millis())
                 .unwrap_or(0);
             automation.token = format!("{epoch}-{nanos}");
         }
         automation.token.clone()
     };
-    let session = data;
     let Some(local_cell) = session.get("localPlayerCellId").and_then(Value::as_u64) else {
         return;
     };
@@ -127,12 +140,15 @@ pub async fn on_champ_select(app: tauri::AppHandle, epoch: u64, _seq: u64, data:
         &bans,
     )
     .await;
-    auto_complete(&state, functions, &token, &session, local_cell).await;
-    auto_trades(&state, &session, &token).await;
+    auto_complete(&state, functions, &token, &session, local_cell, &position).await;
+    auto_trades(&state, functions, &session, &token).await;
 }
 
 fn terminal(error: &CoreError) -> bool {
-    matches!(error, CoreError::OperationConflict(_))
+    matches!(
+        error,
+        CoreError::OperationConflict(_) | CoreError::OutcomeUnknown(_)
+    )
 }
 
 const MAX_ATTEMPTS: u32 = 5;
@@ -296,7 +312,17 @@ async fn auto_ban(
         return;
     };
     if config.auto_ban_delay > 0 {
-        tokio::time::sleep(std::time::Duration::from_secs(config.auto_ban_delay)).await;
+        let ready_at = {
+            let Ok(mut automation) = state.automation.lock() else {
+                return;
+            };
+            *automation
+                .ban_ready_at
+                .get_or_insert_with(|| Instant::now() + Duration::from_secs(config.auto_ban_delay))
+        };
+        if Instant::now() < ready_at {
+            return;
+        }
     }
     let path = format!("/lol-champ-select/v1/session/actions/{action_id}");
     let hover = state
@@ -426,6 +452,7 @@ async fn auto_complete(
     token: &str,
     session: &Value,
     local_cell: u64,
+    position: &str,
 ) {
     if !config.enable_auto_select_timeout_completed {
         return;
@@ -444,8 +471,36 @@ async fn auto_complete(
         };
         automation.complete_attempt
     };
-    let Some((action_id, champion_id)) = find_in_progress_pick(session, local_cell) else {
+    let now = now_ms();
+    if !completion_ready(session, now) {
         return;
+    }
+    // The timer can be stale/frozen near the end of a phase. Re-read the
+    // session before locking and re-check the action and candidate list.
+    let Ok(fresh) = state
+        .session
+        .lcu_get_fresh("/lol-champ-select/v1/session")
+        .await
+    else {
+        return;
+    };
+    if !completion_ready(&fresh, now) {
+        return;
+    }
+    let Some((action_id, current_champion)) = find_in_progress_pick(&fresh, local_cell) else {
+        return;
+    };
+    let unavailable = cant_select(&fresh, local_cell);
+    let champion_id = if !unavailable.contains(&current_champion) {
+        current_champion
+    } else {
+        let Some(candidate) = candidates(config, "pick", position)
+            .into_iter()
+            .find(|candidate| !unavailable.contains(candidate))
+        else {
+            return;
+        };
+        candidate
     };
     let operation_id = format!("complete:{token}:{action_id}:{champion_id}:{attempt}");
     match state
@@ -477,11 +532,79 @@ async fn auto_complete(
     }
 }
 
-async fn auto_trades(state: &AppState, session: &Value, token: &str) {
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn completion_ready(session: &Value, now_ms: i64) -> bool {
+    let Some(timer) = session.get("timer") else {
+        return false;
+    };
+    if timer.get("isInfinite").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    let Some(left) = timer.get("adjustedTimeLeftInPhase").and_then(Value::as_i64) else {
+        return false;
+    };
+    let remaining = timer
+        .get("internalNowInEpochMs")
+        .and_then(Value::as_i64)
+        .map(|internal| internal.saturating_add(left).saturating_sub(now_ms))
+        .unwrap_or(left);
+    remaining <= LOCK_LEAD_MS
+}
+
+fn cant_select(session: &Value, local_cell: u64) -> Vec<u64> {
+    let mut unavailable = session
+        .get("bans")
+        .map(|bans| {
+            ["myTeamBans", "theirTeamBans"]
+                .iter()
+                .flat_map(|key| {
+                    bans.get(key)
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_u64)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for action in flattened_actions(session) {
+        if action.get("type").and_then(Value::as_str) != Some("pick")
+            || action.get("actorCellId").and_then(Value::as_u64) == Some(local_cell)
+            || action.get("completed").and_then(Value::as_bool) != Some(true)
+        {
+            continue;
+        }
+        if let Some(champion_id) = action.get("championId").and_then(Value::as_u64) {
+            if champion_id > 0 {
+                unavailable.push(champion_id);
+            }
+        }
+    }
+    unavailable
+}
+
+fn trade_enabled(config: &FunctionConfig, collection: &str) -> bool {
+    match collection {
+        "trades" => config.auto_accept_champ_trade,
+        "pickOrderSwaps" => config.auto_accept_ceil_swap,
+        _ => false,
+    }
+}
+
+async fn auto_trades(state: &AppState, config: &FunctionConfig, session: &Value, token: &str) {
     for (collection, accept, clear) in [
         ("trades", "trades", "ongoing-trade"),
         ("pickOrderSwaps", "swaps", "ongoing-swap"),
     ] {
+        if !trade_enabled(config, collection) {
+            continue;
+        }
         let Some(items) = session.get(collection).and_then(Value::as_array) else {
             continue;
         };
@@ -602,5 +725,64 @@ mod tests {
         assert_eq!(find_action(&session, 0, "pick", true), Some(8));
         assert_eq!(find_in_progress_pick(&session, 0), Some((8, 2)));
         assert!(find_action(&session, 5, "ban", true).is_none());
+    }
+
+    #[test]
+    fn completion_waits_for_the_last_four_seconds() {
+        let now = 1_000_000;
+        let timer = |left: i64| {
+            json!({
+                "timer": {
+                    "adjustedTimeLeftInPhase": left,
+                    "internalNowInEpochMs": now,
+                    "isInfinite": false
+                }
+            })
+        };
+        assert!(!completion_ready(&timer(10_000), now));
+        assert!(completion_ready(&timer(3_999), now));
+        assert!(!completion_ready(&json!({}), now));
+        assert!(!completion_ready(
+            &json!({
+                "timer": {
+                    "adjustedTimeLeftInPhase": 1_000,
+                    "internalNowInEpochMs": now,
+                    "isInfinite": true
+                }
+            }),
+            now
+        ));
+    }
+
+    #[test]
+    fn unavailable_champions_include_bans_and_completed_enemy_picks() {
+        let session = json!({
+            "localPlayerCellId": 0,
+            "bans": {"myTeamBans": [10], "theirTeamBans": [11]},
+            "actions": [[
+                {"actorCellId": 0, "type": "pick", "completed": true, "championId": 12},
+                {"actorCellId": 1, "type": "pick", "completed": true, "championId": 13},
+                {"actorCellId": 2, "type": "pick", "completed": false, "championId": 14}
+            ]]
+        });
+        let unavailable = cant_select(&session, 0);
+        assert_eq!(unavailable, vec![10, 11, 13]);
+    }
+
+    #[test]
+    fn trade_switches_are_respected() {
+        let mut config = FunctionConfig::default();
+        assert!(!trade_enabled(&config, "trades"));
+        assert!(!trade_enabled(&config, "pickOrderSwaps"));
+        config.auto_accept_champ_trade = true;
+        config.auto_accept_ceil_swap = true;
+        assert!(trade_enabled(&config, "trades"));
+        assert!(trade_enabled(&config, "pickOrderSwaps"));
+    }
+
+    #[test]
+    fn outcome_unknown_is_terminal() {
+        assert!(terminal(&CoreError::OutcomeUnknown("unknown".into())));
+        assert!(terminal(&CoreError::OperationConflict("conflict".into())));
     }
 }
