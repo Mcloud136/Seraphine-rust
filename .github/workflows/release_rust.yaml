@@ -69,6 +69,8 @@ jobs:
 
       - name: Build Chinese installer
         shell: bash
+        env:
+          SERAPHINE_INSTALLER_VERSION: ${{ steps.version.outputs.value }}
         run: |
           version="${{ steps.version.outputs.value }}"
           iscc=""
@@ -98,6 +100,7 @@ jobs:
           fi
           "$iscc" installer/seraphine-rust.iss
           test -f "installer/Output/SeraphineRust-${version}-setup-zh.exe"
+          echo "Chinese installer built for $version"
 
       - name: Build latest.json
         shell: bash
@@ -138,6 +141,40 @@ jobs:
             --url "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Seraphine.Rust_${version}_x64-setup.exe" \
             --output "gitee-assets/latest.json"
 
+      - name: Publish raw updater manifest
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          cp gitee-assets/latest.json "$RUNNER_TEMP/latest.json"
+          git fetch origin main
+          git checkout -B manifest-sync origin/main
+          mkdir -p updater
+          cp "$RUNNER_TEMP/latest.json" updater/latest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updater/latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: publish updater manifest ${{ steps.version.outputs.value }}"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                echo "raw updater manifest pushed"
+                break
+              fi
+              echo "push attempt $attempt failed; rebasing"
+              git fetch origin main
+              git rebase -X theirs origin/main
+              sleep 5
+            done
+            git push origin HEAD:main
+          fi
+
+      - name: Dispatch Gitee mirror sync
+        if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=sync-gitee
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -153,7 +190,7 @@ jobs:
 
       - name: Publish release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Seraphine Rust ${{ steps.version.outputs.value }}
@@ -169,7 +206,7 @@ jobs:
 
       - name: Publish updater manifest
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: updater
           name: Updater manifest
@@ -212,14 +249,4 @@ jobs:
             --target main \
             --files gitee-assets/latest.json
 
-      - name: Publish ARAM data to Gitee
-        if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
-        shell: bash
-        run: |
-          rust/target/release/release-tool.exe gitee \
-            --owner "$GITEE_OWNER" --repo "$GITEE_REPO" \
-            --tag aram-data-latest \
-            --release-name "ARAM data (latest)" \
-            --release-body "Automated ARAM balance snapshot (wiki.leagueoflegends.com, CC BY-SA 3.0)." \
-            --target main \
-            --files rust/resources/data/AramBuff.json rust/resources/data/aram-manifest.json
+      

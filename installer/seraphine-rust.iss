@@ -1,4 +1,7 @@
-#define AppVersion "2.0.2"
+#define AppVersion GetEnv("SERAPHINE_INSTALLER_VERSION")
+#if AppVersion == ""
+#error SERAPHINE_INSTALLER_VERSION is required
+#endif
 #define AppName "Seraphine Rust"
 #define AppExe "seraphine-app.exe"
 #define SourceExe "..\rust\app\src-tauri\target\release\seraphine-app.exe"
@@ -18,7 +21,7 @@ VersionInfoVersion={#AppVersion}.0
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 VersionInfoCopyright=Copyright © 2026 Mcloud
-DefaultDirName={localappdata}\Programs\{#AppName}
+DefaultDirName={localappdata}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 ShowLanguageDialog=no
@@ -46,6 +49,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExe}"; Flags: ignoreversion
+Source: "ChineseSimplified-LICENSE.txt"; DestDir: "{app}\ThirdPartyLicenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
@@ -64,6 +68,16 @@ begin
     RegKeyExists(HKCU, 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}');
 end;
 
+function LegacyInstallPresent: Boolean;
+var
+  LegacyDir: String;
+begin
+  LegacyDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
+  Result :=
+    FileExists(LegacyDir + '\unins000.exe') or
+    FileExists(LegacyDir + '\{#AppExe}');
+end;
+
 function InitializeSetup: Boolean;
 begin
   Result := True;
@@ -74,5 +88,16 @@ begin
       '“Microsoft Edge WebView2 Runtime” 后再运行安装程序。',
       mbError, MB_OK);
     Result := False;
+    Exit;
+  end;
+  if LegacyInstallPresent then
+  begin
+    if MsgBox('检测到旧版 Seraphine Rust 安装在：' + #13#10 +
+      ExpandConstant('{localappdata}\Programs\{#AppName}') + #13#10#13#10 +
+      '本版本改用与自动更新一致的安装目录。建议先卸载旧版再安装，' +
+      '否则“应用和功能”中可能出现两个条目。' + #13#10#13#10 +
+      '是否仍要继续安装？',
+      mbConfirmation, MB_YESNO) = IDNO then
+      Result := False;
   end;
 end;

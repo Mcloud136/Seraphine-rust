@@ -10,9 +10,12 @@ use crate::paths::AppPaths;
 pub const SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_WORKSPACE: &str = "app";
 pub const DEFAULT_ARAM_FEED_URL: &str =
-    "https://gitee.com/wxbns/seraphine-rust/releases/download/aram-data-latest/aram-manifest.json";
-const LEGACY_ARAM_FEED_URL: &str =
-    "https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json";
+    "https://gitee.com/wxbns/seraphine-rust/raw/main/aram/aram-manifest.json";
+const LEGACY_ARAM_FEED_URLS: [&str; 3] = [
+    "https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json",
+    "https://gitee.com/wxbns/seraphine-rust/releases/download/aram-data-latest/aram-manifest.json",
+    "https://raw.githubusercontent.com/Mcloud136/Seraphine-rust/main/aram/aram-manifest.json",
+];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -522,7 +525,7 @@ fn backup_corrupt(path: &Path) -> Result<PathBuf, std::io::Error> {
 fn normalize(mut config: AppConfig) -> AppConfig {
     config.schema_version = SCHEMA_VERSION;
     config.general.backend_mode = "rust".into();
-    if config.functions.aram_data_feed_url == LEGACY_ARAM_FEED_URL {
+    if LEGACY_ARAM_FEED_URLS.contains(&config.functions.aram_data_feed_url.as_str()) {
         config.functions.aram_data_feed_url = DEFAULT_ARAM_FEED_URL.into();
     }
     config
@@ -1026,13 +1029,15 @@ mod tests {
 
     #[test]
     fn migrates_legacy_github_feed_to_gitee() {
-        let mut config = AppConfig::default();
-        config.functions.aram_data_feed_url = LEGACY_ARAM_FEED_URL.into();
-        let normalized = normalize(config);
-        assert_eq!(
-            normalized.functions.aram_data_feed_url,
-            DEFAULT_ARAM_FEED_URL
-        );
+        for legacy in LEGACY_ARAM_FEED_URLS {
+            let mut config = AppConfig::default();
+            config.functions.aram_data_feed_url = legacy.into();
+            let normalized = normalize(config);
+            assert_eq!(
+                normalized.functions.aram_data_feed_url,
+                DEFAULT_ARAM_FEED_URL
+            );
+        }
 
         let mut custom = AppConfig::default();
         custom.functions.aram_data_feed_url = "https://example.com/manifest.json".into();

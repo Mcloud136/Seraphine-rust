@@ -48,9 +48,12 @@ jobs:
             echo "ARAM data unchanged"
             exit 0
           fi
+          mkdir -p aram
+          cp rust/resources/data/AramBuff.json aram/AramBuff.json
+          cp rust/resources/data/aram-manifest.json aram/aram-manifest.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add rust/resources/data
+          git add rust/resources/data aram
           git commit -m "chore: update ARAM data snapshot"
           pushed=0
           for attempt in 1 2 3; do
@@ -67,13 +70,19 @@ jobs:
             exit 1
           fi
 
+      - name: Dispatch Gitee mirror sync
+        if: env.GITEE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=sync-gitee
+
       - name: Report snapshot
         run: |
           rust/target/release/release-tool aram-report \
             --manifest rust/resources/data/aram-manifest.json
 
       - name: Publish assets to GitHub Releases
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: aram-data-latest
           name: ARAM data (latest)

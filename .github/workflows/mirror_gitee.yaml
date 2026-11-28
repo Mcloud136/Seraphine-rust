@@ -6,6 +6,9 @@ on:
       - main
     tags:
       - "v*"
+  repository_dispatch:
+    types:
+      - sync-gitee
   workflow_dispatch:
 
 permissions:

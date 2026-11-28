@@ -11,13 +11,16 @@ const MIN_CHAMPIONS: usize = 100;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_DATA_BYTES: usize = 2 * 1024 * 1024;
 const MIN_ATTEMPT_INTERVAL: u64 = 600;
-const ALLOWED_HOSTS: [&str; 5] = [
+const ALLOWED_HOSTS: [&str; 6] = [
     "gitee.com",
+    "raw.giteeusercontent.com",
     "github.com",
     "raw.githubusercontent.com",
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
 ];
+const GITHUB_RAW_FALLBACK: &str =
+    "https://raw.githubusercontent.com/Mcloud136/Seraphine-rust/main/aram/aram-manifest.json";
 
 /// ARAM balance data, preferred from the app cache and backed by the bundle.
 #[derive(Clone)]
@@ -132,7 +135,7 @@ pub async fn update(
     let _ = write_state(&state_path, &state);
 
     let client = build_client(proxy)?;
-    let manifest_bytes = fetch(&client, feed_url, MAX_MANIFEST_BYTES).await?;
+    let (manifest_bytes, feed_base) = fetch_manifest(&client, feed_url).await?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| CoreError::InvalidParams(format!("invalid manifest: {error}")))?;
     validate_manifest(&manifest)?;
@@ -153,9 +156,7 @@ pub async fn update(
     let file = manifest["file"]
         .as_str()
         .ok_or_else(|| CoreError::InvalidParams("manifest has no file".into()))?;
-    let base = reqwest::Url::parse(feed_url)
-        .map_err(|error| CoreError::InvalidParams(error.to_string()))?;
-    let file_url = base
+    let file_url = feed_base
         .join(file)
         .map_err(|error| CoreError::InvalidParams(error.to_string()))?;
     validate_url(file_url.as_str())?;
@@ -194,6 +195,28 @@ pub async fn update(
         version: version.to_string(),
         warning: None,
     })
+}
+
+async fn fetch_manifest(
+    client: &reqwest::Client,
+    feed_url: &str,
+) -> Result<(Vec<u8>, reqwest::Url), CoreError> {
+    match fetch(client, feed_url, MAX_MANIFEST_BYTES).await {
+        Ok(bytes) => {
+            let base = reqwest::Url::parse(feed_url)
+                .map_err(|error| CoreError::InvalidParams(error.to_string()))?;
+            Ok((bytes, base))
+        }
+        Err(primary) if feed_url != GITHUB_RAW_FALLBACK => {
+            let bytes = fetch(client, GITHUB_RAW_FALLBACK, MAX_MANIFEST_BYTES)
+                .await
+                .map_err(|_| primary)?;
+            let base = reqwest::Url::parse(GITHUB_RAW_FALLBACK)
+                .map_err(|error| CoreError::InvalidParams(error.to_string()))?;
+            Ok((bytes, base))
+        }
+        Err(primary) => Err(primary),
+    }
 }
 
 fn validate_url(url: &str) -> Result<(), CoreError> {
@@ -448,6 +471,10 @@ mod tests {
     #[test]
     fn rejects_urls_outside_the_allowlist() {
         assert!(validate_url("https://gitee.com/owner/repo/raw/master/aram-manifest.json").is_ok());
+        assert!(validate_url(
+            "https://raw.giteeusercontent.com/owner/repo/raw/main/aram-manifest.json"
+        )
+        .is_ok());
         assert!(validate_url(
             "https://raw.githubusercontent.com/owner/repo/main/aram-manifest.json"
         )

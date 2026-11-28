@@ -117,13 +117,15 @@ npx tauri build
 运行 Rust 测试：
 
 ```bash
-cd ../..
+cd ..
 cargo test --release --workspace
 ```
 
 构建中文 Inno Setup 安装包（需安装 Inno Setup 6.5+ 或 7.x）：
 
 ```text
+cd ..
+set SERAPHINE_INSTALLER_VERSION=2.0.3
 "C:\Program Files\Inno Setup 7\ISCC.exe" installer\seraphine-rust.iss
 ```
 

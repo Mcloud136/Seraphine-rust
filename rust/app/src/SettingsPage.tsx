@@ -687,7 +687,7 @@ export default function SettingsPage({
           <Field label="ARAM 数据源地址">
             <Input
               value={draft.functions.aramDataFeedUrl}
-              placeholder="https://github.com/Mcloud136/Seraphine-rust/releases/download/aram-data-latest/aram-manifest.json"
+              placeholder="https://gitee.com/wxbns/seraphine-rust/raw/main/aram/aram-manifest.json"
               onChange={(_, data) =>
                 updateFunctions("aramDataFeedUrl", data.value)
               }

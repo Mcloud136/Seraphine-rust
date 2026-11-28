@@ -1,0 +1,11 @@
+{
+  "notes": "Seraphine Rust 2.0.2",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSmpKQmlzbmw5UmtyUHo3SC8ybmRsMDZPTyt5NFpCNW5qNC9uemgzQ21ENjNIbHNZZzhpaG5zcDhNa3Y1aVZEK0lRem14QVNyVzRBN2pYR1lqNGdmUmN3a0FEQjAzZndjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NzY3NDkyCWZpbGU6U2VyYXBoaW5lIFJ1c3RfMi4wLjJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjIuMC4yClhPbEJvbFJGbThwTDVuN2hGKzZiQXNGRkVrbXlXYkdtWnFqZXZMcytXNDNpZHJwSGxJNG5nQ3JFemZEZzV1bUtUUlp3ZjlBYThPTUJGZDJBbnl6dERRPT0K",
+      "url": "https://gitee.com/wxbns/seraphine-rust/releases/download/v2.0.2/Seraphine.Rust_2.0.2_x64-setup.exe"
+    }
+  },
+  "pub_date": "2026-11-27T08:18:19Z",
+  "version": "2.0.2"
+}
