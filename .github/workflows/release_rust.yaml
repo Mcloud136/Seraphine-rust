@@ -141,40 +141,6 @@ jobs:
             --url "https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Seraphine.Rust_${version}_x64-setup.exe" \
             --output "gitee-assets/latest.json"
 
-      - name: Publish raw updater manifest
-        if: github.ref_type == 'tag'
-        shell: bash
-        run: |
-          cp gitee-assets/latest.json "$RUNNER_TEMP/latest.json"
-          git fetch origin main
-          git checkout -B manifest-sync origin/main
-          mkdir -p updater
-          cp "$RUNNER_TEMP/latest.json" updater/latest.json
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add updater/latest.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: publish updater manifest ${{ steps.version.outputs.value }}"
-            for attempt in 1 2 3; do
-              if git push origin HEAD:main; then
-                echo "raw updater manifest pushed"
-                break
-              fi
-              echo "push attempt $attempt failed; rebasing"
-              git fetch origin main
-              git rebase -X theirs origin/main
-              sleep 5
-            done
-            git push origin HEAD:main
-          fi
-
-      - name: Dispatch Gitee mirror sync
-        if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=sync-gitee
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -250,3 +216,37 @@ jobs:
             --files gitee-assets/latest.json
 
       
+
+      - name: Publish raw updater manifest
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          cp gitee-assets/latest.json "$RUNNER_TEMP/latest.json"
+          git fetch origin main
+          git checkout -B manifest-sync origin/main
+          mkdir -p updater
+          cp "$RUNNER_TEMP/latest.json" updater/latest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updater/latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: publish updater manifest ${{ steps.version.outputs.value }}"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                echo "raw updater manifest pushed"
+                break
+              fi
+              echo "push attempt $attempt failed; rebasing"
+              git fetch origin main
+              git rebase -X theirs origin/main
+              sleep 5
+            done
+            git push origin HEAD:main
+          fi
+
+      - name: Dispatch Gitee mirror sync
+        if: github.ref_type == 'tag' && env.GITEE_TOKEN != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/dispatches" -f event_type=sync-gitee

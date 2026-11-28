@@ -486,7 +486,7 @@ export default function SettingsPage({
               }
             />
           </Field>
-          <Field label="DPI 缩放（重启生效）">
+          <Field label="DPI 缩放">
             <Dropdown
               value={DPI_LABELS[draft.personalization.dpiScale] ?? draft.personalization.dpiScale}
               selectedOptions={[draft.personalization.dpiScale]}
@@ -622,7 +622,7 @@ export default function SettingsPage({
             <Caption1 className={styles.muted}>{updateStatus}</Caption1>
           )}
           <Caption1 className={styles.muted}>
-            更新源为 GitHub Releases；安装完成后应用会自动重启。
+            更新清单优先从 Gitee 获取，失败时回退 GitHub；安装完成后应用会自动重启。
           </Caption1>
         </section>
 

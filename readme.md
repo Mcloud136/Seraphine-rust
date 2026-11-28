@@ -1,6 +1,6 @@
 # Seraphine Rust
 
-简体中文 · Windows 10/11 x64 · v2.0.2
+简体中文 · Windows 10/11 x64 · v2.0.3
 
 Seraphine Rust 是英雄联盟战绩查询与辅助工具的 Rust/Tauri 重写版：保留原有查询、对局信息、OP.GG、云顶之弈、ARAM 与自动化能力，同时把启动、主进程占用、写操作可靠性和国内下载/更新体验整体重做。
 
@@ -77,24 +77,25 @@ Seraphine Rust 是英雄联盟战绩查询与辅助工具的 Rust/Tauri 重写�
 
 | 渠道 | 安装包 | 说明 |
 | --- | --- | --- |
-| Gitee（推荐国内） | [SeraphineRust-2.0.2-setup-zh.exe](https://gitee.com/wxbns/seraphine-rust/releases/download/v2.0.2/SeraphineRust-2.0.2-setup-zh.exe) | 全中文 Inno Setup 向导，适合首次安装 |
-| Gitee | [v2.0.2 Release](https://gitee.com/wxbns/seraphine-rust/releases/tag/v2.0.2) | 中文包、NSIS、签名与 ARAM 数据 |
-| GitHub | [Seraphine.Rust_2.0.2_x64-setup.exe](https://github.com/Mcloud136/Seraphine-rust/releases/download/v2.0.2/Seraphine.Rust_2.0.2_x64-setup.exe) | NSIS 自动更新包，与更新器下载的是同一个 |
-| GitHub | [v2.0.2 Release](https://github.com/Mcloud136/Seraphine-rust/releases/tag/v2.0.2) | 全部构建产物与源码 |
+| Gitee（推荐国内） | [SeraphineRust-2.0.3-setup-zh.exe](https://gitee.com/wxbns/seraphine-rust/releases/download/v2.0.3/SeraphineRust-2.0.3-setup-zh.exe) | 全中文 Inno Setup 向导，适合首次安装 |
+| Gitee | [v2.0.3 Release](https://gitee.com/wxbns/seraphine-rust/releases/tag/v2.0.3) | 中文包、NSIS、签名与 ARAM 数据 |
+| GitHub | [Seraphine.Rust_2.0.3_x64-setup.exe](https://github.com/Mcloud136/Seraphine-rust/releases/download/v2.0.3/Seraphine.Rust_2.0.3_x64-setup.exe) | NSIS 自动更新包，与更新器下载的是同一个 |
+| GitHub | [v2.0.3 Release](https://github.com/Mcloud136/Seraphine-rust/releases/tag/v2.0.3) | 全部构建产物与源码 |
 
-安装前请确认已安装 **Microsoft Edge WebView2 Runtime**（Windows 10/11 通常已自带）。两种安装包的安装目录不同：
+安装前请确认已安装 **Microsoft Edge WebView2 Runtime**（Windows 10/11 通常已自带）。两种安装包统一安装到：
 
-- NSIS：`%LOCALAPPDATA%\Seraphine Rust`
-- Inno Setup：`%LOCALAPPDATA%\Programs\Seraphine Rust`
+- `%LOCALAPPDATA%\Seraphine Rust`
 
-用户数据位于 `%LOCALAPPDATA%\Seraphine` 与 `%APPDATA%\Seraphine`；卸载程序不会删除这些数据。建议只保留一种安装方式，切换前先卸载旧版本。
+2.0.2 的中文安装包曾使用 `%LOCALAPPDATA%\Programs\Seraphine Rust`；升级到 2.0.3 前请先卸载旧中文版一次，安装向导也会检测并提示。用户数据位于 `%LOCALAPPDATA%\Seraphine` 与 `%APPDATA%\Seraphine`；卸载程序不会删除这些数据。
 
 ## 更新机制
 
 - 更新清单使用固定标签 `updater`，由 Tauri updater 校验 minisign 签名。
-- **2.0.2 及以后**：先检查 Gitee 清单，失败再回退 GitHub；清单里的安装包地址指向对应下载源。
+- **2.0.3 及以后**：清单使用固定 raw 地址（Gitee 优先、GitHub 回退），发布时随版本提交原子更新，不会再出现附件删除导致的空窗；清单里的安装包地址指向 Gitee 下载源。
+- **2.0.2**：检查 Gitee 的 `updater` 标签附件，失败回退 GitHub；清单里的安装包同样指向 Gitee。
 - **2.0.0 / 2.0.1**：端点只有 GitHub，首次升级会从 GitHub 获取 2.0.2；升级后改为 Gitee 优先。
 - 回退发生在清单获取阶段；一旦拿到 Gitee 清单，下载地址就是清单中的 Gitee 安装包。
+- Gitee 原始文件可能缓存 1–5 分钟；发布后短时间内检查更新可能仍读到上一版，稍后重试即可。
 
 固定地址：
 
