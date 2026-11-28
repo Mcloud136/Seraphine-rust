@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 const MAX_CACHE_ENTRIES: usize = 64;
-const MAX_CACHE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct CacheCounters {
@@ -41,6 +41,7 @@ struct CacheEntry {
     value: Value,
     size: usize,
     expires_at: Instant,
+    last_used: Instant,
 }
 
 pub enum Start {
@@ -105,10 +106,12 @@ impl JsonCache {
             .values
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some(entry) = values.get(key) {
+        if let Some(entry) = values.get_mut(key) {
             if entry.expires_at > now {
+                entry.last_used = now;
+                let value = entry.value.clone();
                 self.counters.record_hit();
-                return Start::Cached(entry.value.clone());
+                return Start::Cached(value);
             }
             values.remove(key);
         }
@@ -133,18 +136,24 @@ impl JsonCache {
                 .values
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
+            let now = Instant::now();
             values.insert(
                 key.to_string(),
                 CacheEntry {
                     value,
                     size,
-                    expires_at: Instant::now() + ttl,
+                    expires_at: now + ttl,
+                    last_used: now,
                 },
             );
             while values.len() > MAX_CACHE_ENTRIES
                 || values.values().map(|entry| entry.size).sum::<usize>() > MAX_CACHE_BYTES
             {
-                let Some(evict) = values.keys().next().cloned() else {
+                let Some(evict) = values
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.last_used)
+                    .map(|(key, _)| key.clone())
+                else {
                     break;
                 };
                 values.remove(&evict);

@@ -120,20 +120,32 @@ async fn summarize_history(
     puuid: &str,
     limit: u32,
 ) -> Vec<Value> {
+    const DETAIL_CONCURRENCY: usize = 6;
     let games = history
         .get("games")
         .and_then(|games| games.get("games"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let selected = games
+        .iter()
+        .take(limit as usize)
+        .filter(|game| game.get("gameId").and_then(Value::as_u64).is_some())
+        .collect::<Vec<_>>();
 
-    let mut matches = Vec::with_capacity(games.len().min(limit as usize));
-    for game in games.iter().take(limit as usize) {
-        let Some(game_id) = game.get("gameId").and_then(Value::as_u64) else {
-            continue;
-        };
-        let detail = match_detail(session, game_id).await.ok();
-        matches.push(summarize_game(game, detail.as_ref(), puuid, catalog));
+    let mut matches = Vec::with_capacity(selected.len());
+    for chunk in selected.chunks(DETAIL_CONCURRENCY) {
+        let details = futures_util::future::join_all(chunk.iter().map(|game| {
+            let game_id = game
+                .get("gameId")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            async move { match_detail(session, game_id).await.ok() }
+        }))
+        .await;
+        for (game, detail) in chunk.iter().zip(details) {
+            matches.push(summarize_game(game, detail.as_ref(), puuid, catalog));
+        }
     }
     matches
 }

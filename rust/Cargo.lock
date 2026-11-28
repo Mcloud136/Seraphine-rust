@@ -1007,6 +1007,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures-util",
+ "log",
  "reqwest",
  "seraphine-automation",
  "seraphine-domain",

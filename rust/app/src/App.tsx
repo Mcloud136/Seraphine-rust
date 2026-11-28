@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -320,10 +320,11 @@ export default function App() {
   const [searchRequest, setSearchRequest] = useState<SearchRequest | null>(
     null,
   );
+  const searchNonce = useRef(0);
 
   const openSearch = useCallback(
     (request: { query: string; gameId?: number }) => {
-      setSearchRequest({ ...request, nonce: Date.now() });
+      setSearchRequest({ ...request, nonce: ++searchNonce.current });
       setTab("search");
     },
     [],
@@ -331,20 +332,28 @@ export default function App() {
 
   const dark = config?.theme.themeMode?.toLowerCase() === "dark";
 
-  const refresh = useCallback(async () => {
+  const refreshStatus = useCallback(async () => {
     try {
       const next = await invoke<SessionStatus>("session_status");
       setStatus(next);
-      if (next.connected) {
-        const data = await invoke<CareerPayload>("career_overview");
-        setCareer(data);
-      } else {
+      if (!next.connected) {
         setCareer(null);
       }
       setError("");
     } catch (cause) {
       setError(
-        friendlyError(cause, "连接或读取数据失败，请稍后重试。"),
+        friendlyError(cause, "读取客户端状态失败，请稍后重试。"),
+      );
+    }
+  }, []);
+
+  const refreshCareer = useCallback(async () => {
+    try {
+      const data = await invoke<CareerPayload>("career_overview");
+      setCareer(data);
+    } catch (cause) {
+      setError(
+        friendlyError(cause, "读取战绩失败，请稍后重试。"),
       );
     }
   }, []);
@@ -353,7 +362,7 @@ export default function App() {
     setConnecting(true);
     try {
       await invoke("session_connect", { pid: null });
-      await refresh();
+      await refreshStatus();
     } catch (cause) {
       setError(
         friendlyError(cause, "连接或读取数据失败，请稍后重试。"),
@@ -361,7 +370,7 @@ export default function App() {
     } finally {
       setConnecting(false);
     }
-  }, [refresh]);
+  }, [refreshStatus]);
 
   useEffect(() => {
     let disposed = false;
@@ -378,7 +387,7 @@ export default function App() {
     const unlisten = listen<SessionEventPayload>("session://event", (event) => {
       const payload = event.payload;
       if (payload.type === "connected") {
-        void refresh();
+        void refreshStatus();
       } else if (payload.type === "disconnected") {
         setCareer(null);
         setStatus(null);
@@ -392,14 +401,21 @@ export default function App() {
       }
     });
 
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 5000);
+    void refreshStatus();
+    const timer = window.setInterval(() => void refreshStatus(), 5000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
       void unlisten.then((stop) => stop());
     };
-  }, [refresh]);
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    if (!status?.connected || tab !== "career") return;
+    void refreshCareer();
+    const timer = window.setInterval(() => void refreshCareer(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [refreshCareer, status?.connected, tab]);
 
   useEffect(() => {
     if (!career) return;
