@@ -154,13 +154,33 @@ impl Catalog {
         json!({
             "champions": section("champs"),
             "items": section("items"),
-            "spells": section("summonerSpells"),
+            "spells": web_spells(&self.snapshot),
             "runes": section("runes"),
             "queues": section("queues"),
             "augments": section("cherryAugments"),
             "champAliases": section("champAliases"),
         })
     }
+}
+
+/// Summoner spells offered by the picker, matching the legacy whitelist.
+/// The client also returns Classic (Jade) and mode-specific variants
+/// (Poro King, Arena) that must not appear.
+const WEB_SUMMONER_SPELLS: [&str; 12] = [
+    "1", "3", "4", "6", "7", "11", "12", "13", "14", "21", "32", "54",
+];
+
+fn web_spells(snapshot: &Value) -> Value {
+    let Some(spells) = snapshot.get("summonerSpells").and_then(Value::as_object) else {
+        return json!({});
+    };
+    Value::Object(
+        spells
+            .iter()
+            .filter(|(id, _)| WEB_SUMMONER_SPELLS.contains(&id.as_str()))
+            .map(|(id, value)| (id.clone(), value.clone()))
+            .collect(),
+    )
 }
 
 /// Fetches an LCU asset and returns it as a data URL for the web view.
@@ -184,4 +204,35 @@ pub async fn asset_data_url(session: &SessionManager, path: &str) -> Result<Stri
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_snapshot_excludes_classic_and_mode_spells() {
+        let catalog = Catalog {
+            snapshot: json!({
+                "summonerSpells": {
+                    "4": { "name": "闪现" },
+                    "32": { "name": "标记" },
+                    "54": { "name": "占位" },
+                    "74": { "name": "闪现" },
+                    "777": { "name": "重生" },
+                    "2202": { "name": "闪现" }
+                }
+            }),
+        };
+        let spells = catalog.web_snapshot()["spells"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        assert!(spells.contains_key("4"));
+        assert!(spells.contains_key("32"));
+        assert!(spells.contains_key("54"));
+        assert!(!spells.contains_key("74"));
+        assert!(!spells.contains_key("777"));
+        assert!(!spells.contains_key("2202"));
+    }
 }
