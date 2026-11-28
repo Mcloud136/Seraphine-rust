@@ -230,10 +230,7 @@ fn publish_gitee(
         release_body,
         target,
     )?;
-    let release_id = release
-        .get("id")
-        .and_then(Value::as_i64)
-        .context("Gitee release has no id")?;
+    let release_id = release_id(&release).context("Gitee release has no id")?;
     let wanted: Vec<&str> = files
         .iter()
         .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
@@ -281,21 +278,29 @@ fn ensure_release(
         .query(&[("access_token", token)])
         .send()
         .context("GET Gitee release")?;
-    if response.status() == StatusCode::NOT_FOUND {
-        let response = client
-            .post(format!("{base}/releases"))
-            .form(&[
-                ("access_token", token),
-                ("tag_name", tag),
-                ("name", name),
-                ("body", body),
-                ("target_commitish", target),
-            ])
-            .send()
-            .context("POST Gitee release")?;
-        return parse_response(response, "create Gitee release");
+    if response.status() != StatusCode::NOT_FOUND {
+        let value = parse_response(response, "GET Gitee release")?;
+        if release_id(&value).is_some() {
+            return Ok(value);
+        }
+        // Gitee answers 200 with `null` when the tag has no release yet.
     }
-    parse_response(response, "GET Gitee release")
+    let response = client
+        .post(format!("{base}/releases"))
+        .form(&[
+            ("access_token", token),
+            ("tag_name", tag),
+            ("name", name),
+            ("body", body),
+            ("target_commitish", target),
+        ])
+        .send()
+        .context("POST Gitee release")?;
+    parse_response(response, "create Gitee release")
+}
+
+fn release_id(value: &Value) -> Option<i64> {
+    value.get("id").and_then(Value::as_i64)
 }
 
 fn list_attachments(
@@ -431,5 +436,12 @@ mod tests {
             manifest["platforms"]["windows-x86_64"]["url"],
             Value::String("new".into())
         );
+    }
+
+    #[test]
+    fn null_or_empty_release_bodies_mean_missing_release() {
+        assert_eq!(release_id(&json!(null)), None);
+        assert_eq!(release_id(&json!({})), None);
+        assert_eq!(release_id(&json!({ "id": 7 })), Some(7));
     }
 }
