@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
@@ -260,7 +261,44 @@ fn publish_gitee(
         upload_with_retry(&client, &base, release_id, &token, name, bytes)?;
         println!("https://gitee.com/{owner}/{repo}/releases/download/{tag_name}/{name}");
     }
+
+    let attachments = list_attachments(&client, &base, release_id, &token)?;
+    for id in duplicate_attachment_ids(&attachments, &wanted) {
+        delete_attachment(&client, &base, release_id, id, &token)?;
+    }
     Ok(())
+}
+
+fn duplicate_attachment_ids(attachments: &[Value], wanted: &[&str]) -> Vec<i64> {
+    let mut latest: HashMap<&str, i64> = HashMap::new();
+    for attachment in attachments {
+        let Some(name) = attachment.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(id) = attachment.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        if !wanted.contains(&name) {
+            continue;
+        }
+        latest
+            .entry(name)
+            .and_modify(|keep| *keep = (*keep).max(id))
+            .or_insert(id);
+    }
+    let mut stale = Vec::new();
+    for attachment in attachments {
+        let Some(name) = attachment.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(id) = attachment.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        if latest.get(name).is_some_and(|keep| *keep != id) {
+            stale.push(id);
+        }
+    }
+    stale
 }
 
 fn ensure_release(
@@ -443,5 +481,19 @@ mod tests {
         assert_eq!(release_id(&json!(null)), None);
         assert_eq!(release_id(&json!({})), None);
         assert_eq!(release_id(&json!({ "id": 7 })), Some(7));
+    }
+
+    #[test]
+    fn duplicate_attachment_ids_keep_the_newest_copy() {
+        let attachments = vec![
+            json!({ "id": 10, "name": "a.exe" }),
+            json!({ "id": 11, "name": "a.exe" }),
+            json!({ "id": 12, "name": "b.sig" }),
+            json!({ "id": 99, "name": "unrelated.txt" }),
+        ];
+        assert_eq!(
+            duplicate_attachment_ids(&attachments, &["a.exe", "b.sig"]),
+            vec![10]
+        );
     }
 }
