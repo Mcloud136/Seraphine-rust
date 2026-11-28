@@ -25,7 +25,7 @@ jobs:
       GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_REMOTE: https://wxbns:${{ secrets.GITEE_TOKEN }}@gitee.com/wxbns/seraphine-rust.git
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
