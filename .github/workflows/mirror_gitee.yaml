@@ -34,4 +34,5 @@ jobs:
         run: |
           git fetch --tags --force origin
           git push "$GITEE_REMOTE" refs/remotes/origin/main:refs/heads/main
-          git push "$GITEE_REMOTE" --tags
+          # Release repairs may move a tag; the mirror follows the source.
+          git push "$GITEE_REMOTE" --tags --force
