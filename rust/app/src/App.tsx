@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -18,8 +18,6 @@ import {
   Title3,
   makeStyles,
   tokens,
-  webDarkTheme,
-  webLightTheme,
 } from "@fluentui/react-components";
 import {
   ChevronLeftRegular,
@@ -48,6 +46,7 @@ import OpggPage from "./OpggPage";
 import SettingsPage from "./SettingsPage";
 import AuxiliaryPage from "./AuxiliaryPage";
 import type { AppConfig } from "./config";
+import { applyZoom, buildTheme } from "./theme";
 
 interface SessionStatus {
   connected: boolean;
@@ -337,6 +336,11 @@ export default function App() {
   );
 
   const dark = config?.theme.themeMode?.toLowerCase() === "dark";
+  const theme = useMemo(() => buildTheme(config), [config]);
+
+  useEffect(() => {
+    void applyZoom(config?.personalization.dpiScale);
+  }, [config?.personalization.dpiScale]);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -476,10 +480,7 @@ export default function App() {
       : "");
 
   return (
-    <FluentProvider
-      theme={dark ? webDarkTheme : webLightTheme}
-      style={{ height: "100%" }}
-    >
+    <FluentProvider theme={theme} style={{ height: "100%" }}>
       <div
         className={styles.root}
         style={{
@@ -861,6 +862,7 @@ export default function App() {
                 reserveGameInfo={Boolean(
                   config?.functions.enableReserveGameinfo,
                 )}
+                showTier={Boolean(config?.functions.showTierInGameInfo)}
                 onOpenSearch={openSearch}
               />
             )}
@@ -891,7 +893,18 @@ export default function App() {
             )}
 
             {tab === "opgg" && (
-              <OpggPage connected={Boolean(status?.connected)} />
+              <OpggPage
+                connected={Boolean(status?.connected)}
+                defaults={
+                  config
+                    ? {
+                        region: config.functions.opggRegion,
+                        tier: config.functions.opggTier,
+                        position: config.functions.opggPosition,
+                      }
+                    : undefined
+                }
+              />
             )}
 
             {tab === "auxiliary" && (

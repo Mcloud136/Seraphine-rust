@@ -259,12 +259,18 @@ const SKILL_LABELS: Record<number, string> = {
   4: "R",
 };
 
-export default function OpggPage({ connected }: { connected: boolean }) {
+export default function OpggPage({
+  connected,
+  defaults,
+}: {
+  connected: boolean;
+  defaults?: { region?: string; tier?: string; position?: string };
+}) {
   const styles = useStyles();
-  const [region, setRegion] = useState("kr");
+  const [region, setRegion] = useState(defaults?.region || "kr");
   const [mode, setMode] = useState("ranked");
-  const [tier, setTier] = useState("emerald_plus");
-  const [position, setPosition] = useState("ADC");
+  const [tier, setTier] = useState(defaults?.tier || "emerald_plus");
+  const [position, setPosition] = useState(defaults?.position || "ADC");
   const [payload, setPayload] = useState<TierPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");

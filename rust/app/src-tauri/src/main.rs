@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, LogicalSize, Manager, State};
@@ -33,6 +34,7 @@ pub(crate) struct AppState {
     pub(crate) automation_lock: tokio::sync::Mutex<()>,
     assets: tokio::sync::Mutex<HashMap<String, String>>,
     close_to_tray: AtomicBool,
+    reconnect_running: AtomicBool,
 }
 
 fn detail(error: impl std::fmt::Display) -> String {
@@ -124,6 +126,83 @@ fn persist_window_size(handle: tauri::AppHandle, scale: f64, width: u32, height:
     });
 }
 
+fn show_opgg_window(app: &tauri::AppHandle, always_on_top: bool) {
+    if let Some(window) = app.get_webview_window("opgg") {
+        let _ = window.set_always_on_top(always_on_top);
+        let _ = window.show();
+        return;
+    }
+    let builder =
+        tauri::WebviewWindowBuilder::new(app, "opgg", tauri::WebviewUrl::App("index.html".into()))
+            .title("Seraphine · OP.GG")
+            .inner_size(520.0, 760.0)
+            .min_inner_size(360.0, 480.0)
+            .always_on_top(always_on_top);
+    match builder.build() {
+        Ok(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Err(error) => log::warn!("failed to open OP.GG window: {error}"),
+    }
+}
+
+fn hide_opgg_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("opgg") {
+        let _ = window.hide();
+    }
+}
+
+fn unix_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn spawn_auto_reconnect(app: tauri::AppHandle) {
+    if app
+        .state::<AppState>()
+        .reconnect_running
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            {
+                let state = app.state::<AppState>();
+                let config = state.config.snapshot().await;
+                if !config.functions.enable_auto_reconnect
+                    || !state.session.status().await.connected
+                {
+                    break;
+                }
+                let phase = state
+                    .session
+                    .lcu_get_fresh("/lol-gameflow/v1/gameflow-phase")
+                    .await
+                    .unwrap_or(Value::Null);
+                if phase.as_str() != Some("Reconnect") {
+                    break;
+                }
+                let operation_id = format!("auto-reconnect:{}", unix_millis());
+                if let Err(error) = state
+                    .writes
+                    .execute(&operation_id, "POST", "/lol-gameflow/v1/reconnect", None)
+                    .await
+                {
+                    log::warn!("auto reconnect failed: {error}");
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        app.state::<AppState>()
+            .reconnect_running
+            .store(false, Ordering::SeqCst);
+    });
+}
+
 #[tauri::command]
 fn set_window_size(window: tauri::WebviewWindow, width: f64, height: f64) -> Result<(), String> {
     if width < 640.0 || height < 480.0 {
@@ -145,11 +224,21 @@ async fn config_get(state: State<'_, AppState>) -> Result<AppConfig, String> {
 }
 
 #[tauri::command]
-async fn config_patch(state: State<'_, AppState>, patch: Value) -> Result<AppConfig, String> {
+async fn config_patch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    patch: Value,
+) -> Result<AppConfig, String> {
     let config = state.config.patch(patch).await.map_err(detail)?;
     state
         .close_to_tray
         .store(config.general.enable_close_to_tray, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("opgg") {
+        let _ = window.set_always_on_top(config.functions.enable_opgg_on_top);
+        if !config.functions.auto_show_opgg {
+            let _ = window.hide();
+        }
+    }
     Ok(config)
 }
 
@@ -577,6 +666,7 @@ fn main() {
             automation_lock: tokio::sync::Mutex::new(()),
             assets: tokio::sync::Mutex::new(HashMap::new()),
             close_to_tray: AtomicBool::new(startup_config.general.enable_close_to_tray),
+            reconnect_running: AtomicBool::new(false),
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -650,6 +740,7 @@ fn main() {
                         }
                         seraphine_core::SessionEvent::Disconnected { reason } => {
                             log::warn!("lcu disconnected: {reason}");
+                            hide_opgg_window(&handle);
                         }
                         seraphine_core::SessionEvent::Error { message } => {
                             log::error!("session error: {message}");
@@ -738,11 +829,34 @@ fn main() {
                             uri,
                             data,
                             ..
-                        } if uri.ends_with("gameflow-phase") => match data.as_str() {
-                            Some("ChampSelect") => automation::begin(&handle, *epoch, *seq),
-                            Some(_) => automation::reset(&handle),
-                            None => {}
-                        },
+                        } if uri.ends_with("gameflow-phase") => {
+                            match data.as_str() {
+                                Some("ChampSelect") => {
+                                    automation::begin(&handle, *epoch, *seq);
+                                    let config =
+                                        handle.state::<AppState>().config.snapshot().await;
+                                    if config.functions.auto_show_opgg {
+                                        show_opgg_window(
+                                            &handle,
+                                            config.functions.enable_opgg_on_top,
+                                        );
+                                    }
+                                }
+                                Some("Reconnect") => {
+                                    automation::reset(&handle);
+                                    let config =
+                                        handle.state::<AppState>().config.snapshot().await;
+                                    if config.functions.enable_auto_reconnect {
+                                        spawn_auto_reconnect(handle.clone());
+                                    }
+                                }
+                                Some(_) => {
+                                    automation::reset(&handle);
+                                    hide_opgg_window(&handle);
+                                }
+                                None => {}
+                            }
+                        }
                         seraphine_core::SessionEvent::Lcu {
                             epoch,
                             seq,
@@ -784,6 +898,10 @@ fn main() {
                         .unwrap_or(Value::Null);
                     if phase.as_str() != Some("ChampSelect") {
                         continue;
+                    }
+                    let config = state.config.snapshot().await;
+                    if config.functions.auto_show_opgg {
+                        show_opgg_window(&automation_poll, config.functions.enable_opgg_on_top);
                     }
                     let session = match state
                         .session

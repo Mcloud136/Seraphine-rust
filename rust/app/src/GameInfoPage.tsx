@@ -476,10 +476,12 @@ function championIcon(championId: number): string | undefined {
 export default function GameInfoPage({
   connected,
   reserveGameInfo = false,
+  showTier = false,
   onOpenSearch,
 }: {
   connected: boolean;
   reserveGameInfo?: boolean;
+  showTier?: boolean;
   onOpenSearch: (request: { query: string; gameId?: number }) => void;
 }) {
   const styles = useStyles();
@@ -718,20 +720,22 @@ export default function GameInfoPage({
                     </Badge>
                   )}
                 </div>
-                <div className={styles.rankLine}>
-                  <Caption1>
-                    单双排 {rankText(player.rank?.solo)}
-                    {player.rank?.solo
-                      ? ` · ${player.rank.solo.lp ?? 0} LP`
-                      : ""}
-                  </Caption1>
-                  <Caption1>
-                    灵活 {rankText(player.rank?.flex)}
-                    {player.rank?.flex
-                      ? ` · ${player.rank.flex.lp ?? 0} LP`
-                      : ""}
-                  </Caption1>
-                </div>
+                {showTier && (
+                  <div className={styles.rankLine}>
+                    <Caption1>
+                      单双排 {rankText(player.rank?.solo)}
+                      {player.rank?.solo
+                        ? ` · ${player.rank.solo.lp ?? 0} LP`
+                        : ""}
+                    </Caption1>
+                    <Caption1>
+                      灵活 {rankText(player.rank?.flex)}
+                      {player.rank?.flex
+                        ? ` · ${player.rank.flex.lp ?? 0} LP`
+                        : ""}
+                    </Caption1>
+                  </div>
+                )}
                 <div className={styles.recentIcons}>
                   {games.map((game) => (
                     <button

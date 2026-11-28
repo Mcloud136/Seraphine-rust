@@ -660,14 +660,9 @@ export default function SettingsPage({
               }
             />
           </Field>
-          <Field label="自动随机皮肤">
-            <Switch
-              checked={draft.functions.enableRandomSkin}
-              onChange={(_, data) =>
-                updateFunctions("enableRandomSkin", data.checked)
-              }
-            />
-          </Field>
+          <Caption1 className={styles.muted}>
+            自动随机皮肤暂未支持，相关设置已隐藏。
+          </Caption1>
           <Field label="保留对局信息">
             <Switch
               checked={draft.functions.enableReserveGameinfo}
