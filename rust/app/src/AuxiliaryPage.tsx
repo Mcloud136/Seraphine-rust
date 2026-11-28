@@ -86,9 +86,14 @@ const DISPLAY_QUEUES = [
   { value: "RANKED_FLEX_SR", label: "灵活组排" },
 ];
 
-export default function AuxiliaryPage() {
+export default function AuxiliaryPage({
+  connected,
+}: {
+  connected: boolean;
+}) {
   const styles = useStyles();
   const [busy, setBusy] = useState(false);
+  const blocked = busy || !connected;
   const [message, setMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [availability, setAvailability] = useState("online");
@@ -259,7 +264,12 @@ export default function AuxiliaryPage() {
       });
       setMessage("已发起观战");
     } catch (cause) {
-      setMessage(friendlyError(cause));
+      const fallback = friendlyError(cause, "发起观战失败，请稍后重试。");
+      setMessage(
+        /404|409/.test(String(cause))
+          ? "该玩家当前不在可观战的对局中。"
+          : fallback,
+      );
     } finally {
       setBusy(false);
     }
@@ -284,6 +294,13 @@ export default function AuxiliaryPage() {
   return (
     <div className={styles.page}>
       <Title3>辅助工具</Title3>
+      {!connected && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            请先连接英雄联盟客户端，连接后即可使用辅助工具。
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {message && (
         <MessageBar
           intent={
@@ -308,7 +325,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -340,7 +357,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -393,7 +410,7 @@ export default function AuxiliaryPage() {
           })()}
           <Button
             size="small"
-            disabled={busy || !backgroundSkin}
+            disabled={blocked || !backgroundSkin}
             onClick={() => {
               void (async () => {
                 setBusy(true);
@@ -439,14 +456,14 @@ export default function AuxiliaryPage() {
           <Title3>挑战与徽章</Title3>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() => void removeChallengeTokens()}
           >
             移除挑战代币
           </Button>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() => void removePrestigeCrest()}
           >
             移除 prestige 徽章
@@ -508,7 +525,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() =>
               void write(
                 "/lol-chat/v1/me",
@@ -539,7 +556,7 @@ export default function AuxiliaryPage() {
           </Field>
           <Button
             size="small"
-            disabled={busy || !spectateName}
+            disabled={blocked || !spectateName}
             onClick={() => void spectate()}
           >
             观战该玩家
@@ -554,7 +571,7 @@ export default function AuxiliaryPage() {
           <Field label="锁定 PersistedSettings.json（只读）">
             <Switch
               checked={lockState.locked}
-              disabled={!lockState.available || busy}
+              disabled={!lockState.available || blocked}
               onChange={(_, data) => void toggleLockConfig(data.checked)}
             />
           </Field>
@@ -572,7 +589,7 @@ export default function AuxiliaryPage() {
           <Title3>客户端</Title3>
           <Button
             size="small"
-            disabled={busy}
+            disabled={blocked}
             onClick={() =>
               void write(
                 "/lol-gameflow/v1/reconnect",

@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { friendlyError } from "./errors";
 import {
   Badge,
+  Button,
   Caption1,
+  MessageBar,
+  MessageBarBody,
   Tab,
   TabList,
   Text,
@@ -472,9 +475,11 @@ function championIcon(championId: number): string | undefined {
 
 export default function GameInfoPage({
   connected,
+  reserveGameInfo = false,
   onOpenSearch,
 }: {
   connected: boolean;
+  reserveGameInfo?: boolean;
   onOpenSearch: (request: { query: string; gameId?: number }) => void;
 }) {
   const styles = useStyles();
@@ -488,11 +493,19 @@ export default function GameInfoPage({
   const [live, setLive] = useState<LiveGame | null>(null);
   const [champions, setChampions] = useState<Record<string, string>>({});
   const [items, setItems] = useState<Record<string, { iconPath?: string }>>({});
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!connected) {
-      setAlly(null);
-      setEnemy(null);
+      setLive(null);
+      setChampSelect(null);
+      setBuffs({});
+      setAramMeta(null);
+      setError("");
+      if (!reserveGameInfo) {
+        setAlly(null);
+        setEnemy(null);
+      }
       return;
     }
     let disposed = false;
@@ -521,11 +534,20 @@ export default function GameInfoPage({
         if (liveResult.status === "fulfilled") {
           setLive(liveResult.value);
         }
-        if (
-          allyResult.status === "rejected" &&
-          enemyResult.status === "rejected"
-        ) {
-          setError(String(allyResult.reason));
+        if (allyResult.status === "rejected") {
+          setError(
+            friendlyError(
+              allyResult.reason,
+              "己方对局信息读取失败，请确认客户端处于选人或对局中。",
+            ),
+          );
+        } else if (enemyResult.status === "rejected") {
+          setError(
+            friendlyError(
+              enemyResult.reason,
+              "敌方对局信息读取失败，请确认客户端处于选人或对局中。",
+            ),
+          );
         } else {
           setError("");
         }
@@ -542,7 +564,7 @@ export default function GameInfoPage({
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [connected]);
+  }, [connected, reserveGameInfo, refreshTick]);
 
   useEffect(() => {
     if (!connected) return;
@@ -605,11 +627,27 @@ export default function GameInfoPage({
         )}
       </div>
 
-      {error && <Caption1 className={styles.muted}>{error}</Caption1>}
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span>{error}</span>
+              <Button
+                size="small"
+                onClick={() => setRefreshTick((tick) => tick + 1)}
+              >
+                重试
+              </Button>
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
-      {live && <LiveGameCard live={live} items={items} styles={styles} />}
+      {connected && live && (
+        <LiveGameCard live={live} items={items} styles={styles} />
+      )}
 
-      {champSelect && (
+      {connected && champSelect && (
         <ChampSelectCard
           session={champSelect}
           champions={champions}

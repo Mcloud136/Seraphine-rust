@@ -125,6 +125,16 @@ fn persist_window_size(handle: tauri::AppHandle, scale: f64, width: u32, height:
 }
 
 #[tauri::command]
+fn set_window_size(window: tauri::WebviewWindow, width: f64, height: f64) -> Result<(), String> {
+    if width < 640.0 || height < 480.0 {
+        return Err("window size must be at least 640x480".into());
+    }
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(detail)
+}
+
+#[tauri::command]
 fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
@@ -571,9 +581,9 @@ fn main() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let size = window.inner_size().unwrap_or_default();
                 if state.close_to_tray.load(Ordering::SeqCst) {
-                    let scale = window.scale_factor().unwrap_or(1.0);
-                    let size = window.outer_size().unwrap_or_default();
                     persist_window_size(
                         window.app_handle().clone(),
                         scale,
@@ -582,12 +592,16 @@ fn main() {
                     );
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    let patch = window_size_value(scale, size.width, size.height);
+                    let _ = state.config.patch_blocking(patch);
                 }
             }
         })
         .invoke_handler(tauri::generate_handler![
             config_get,
             config_patch,
+            set_window_size,
             app_version,
             set_mica,
             session_status,
@@ -895,7 +909,7 @@ fn main() {
                         if let Some(window) = app.get_webview_window("main") {
                             let state = app.state::<AppState>();
                             let scale = window.scale_factor().unwrap_or(1.0);
-                            let size = window.outer_size().unwrap_or_default();
+                            let size = window.inner_size().unwrap_or_default();
                             let patch = window_size_value(scale, size.width, size.height);
                             let _ = state.config.patch_blocking(patch);
                         }

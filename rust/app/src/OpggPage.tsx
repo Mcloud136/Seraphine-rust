@@ -6,6 +6,8 @@ import {
   Button,
   Caption1,
   Dropdown,
+  MessageBar,
+  MessageBarBody,
   Option,
   Spinner,
   Text,
@@ -398,10 +400,25 @@ export default function OpggPage({ connected }: { connected: boolean }) {
         )}
       </div>
 
-      {error && <Caption1 className={styles.muted}>{error}</Caption1>}
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span>{error}</span>
+              <Button size="small" onClick={() => void load()}>
+                重试
+              </Button>
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {buildLoading && <Spinner label={`读取 ${buildName} 出装…`} />}
-      {buildError && <Caption1 className={styles.muted}>{buildError}</Caption1>}
+      {buildError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{buildError}</MessageBarBody>
+        </MessageBar>
+      )}
       {build && !buildLoading && (
         <div className={styles.build}>
           <div className={styles.buildHeader}>

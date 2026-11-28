@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { friendlyError } from "./errors";
 import {
@@ -35,6 +35,11 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "space-between",
     gap: "12px",
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
+    padding: "4px 0 8px",
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   grid: {
     display: "block",
@@ -73,6 +78,17 @@ const useStyles = makeStyles({
 });
 
 const DPI_OPTIONS = ["Auto", "1", "1.25", "1.5", "1.75", "2"];
+const THEME_LABELS: Record<string, string> = { Light: "浅色", Dark: "深色" };
+const DPI_LABELS: Record<string, string> = { Auto: "自动（跟随系统）" };
+
+export function parseWindowSize(
+  value: string,
+): { width: number; height: number } | null {
+  const [width, height] = value.split(",").map((part) => Number(part.trim()));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width < 640 || height < 480) return null;
+  return { width: Math.round(width), height: Math.round(height) };
+}
 const LANGUAGE_OPTIONS = [
   { value: "Auto", label: "自动" },
   { value: "zh_CN", label: "简体中文" },
@@ -125,13 +141,19 @@ const QUEUE_FILTER_ROWS: [string, string][] = [
 
 export default function SettingsPage({
   config,
+  active = true,
   onSaved,
 }: {
   config: AppConfig;
+  active?: boolean;
   onSaved: (config: AppConfig) => void;
 }) {
   const styles = useStyles();
   const [draft, setDraft] = useState<AppConfig>(config);
+  const [pollText, setPollText] = useState(
+    String(config.general.processPollMs),
+  );
+  const autoChecked = useRef(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [aramBusy, setAramBusy] = useState(false);
@@ -157,14 +179,17 @@ export default function SettingsPage({
 
   useEffect(() => {
     setDraft(config);
+    setPollText(String(config.general.processPollMs));
   }, [config]);
 
   useEffect(() => {
-    if (!config.general.enableCheckUpdate) return;
+    if (!active || autoChecked.current || !config.general.enableCheckUpdate) {
+      return;
+    }
+    autoChecked.current = true;
     void checkUpdates();
-    // 只在页面首次打开时自动检查一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [active, config.general.enableCheckUpdate]);
 
   const updateGeneral = <K extends keyof GeneralConfig>(
     key: K,
@@ -323,6 +348,11 @@ export default function SettingsPage({
   }
 
   async function save() {
+    const windowSize = parseWindowSize(draft.personalization.windowSize);
+    if (!windowSize) {
+      setMessage("窗口尺寸格式不正确，请填写“宽, 高”，且不小于 640 × 480。");
+      return;
+    }
     setSaving(true);
     setMessage("");
     try {
@@ -339,6 +369,7 @@ export default function SettingsPage({
         enabled: updated.personalization.micaEnabled,
         dark: updated.theme.themeMode.toLowerCase() === "dark",
       }).catch(() => undefined);
+      await invoke("set_window_size", windowSize).catch(() => undefined);
       setMessage("设置已保存");
     } catch (cause) {
       setMessage(friendlyError(cause, "保存设置失败，请稍后重试。"));
@@ -405,10 +436,16 @@ export default function SettingsPage({
           <Field label="客户端轮询间隔（毫秒）">
             <Input
               type="number"
-              value={String(draft.general.processPollMs)}
-              onChange={(_, data) =>
-                updateGeneral("processPollMs", Number(data.value) || 1500)
-              }
+              value={pollText}
+              onChange={(_, data) => setPollText(data.value)}
+              onBlur={() => {
+                const parsed = Number(pollText);
+                const next = Number.isFinite(parsed)
+                  ? Math.min(60_000, Math.max(500, Math.round(parsed)))
+                  : draft.general.processPollMs;
+                setPollText(String(next));
+                updateGeneral("processPollMs", next);
+              }}
             />
           </Field>
           <Field label="英雄联盟安装目录（每行一个）">
@@ -431,7 +468,7 @@ export default function SettingsPage({
           <Title3>外观</Title3>
           <Field label="主题模式">
             <Dropdown
-              value={draft.theme.themeMode}
+              value={THEME_LABELS[draft.theme.themeMode] ?? draft.theme.themeMode}
               selectedOptions={[draft.theme.themeMode]}
               onOptionSelect={(_, data) =>
                 updateTheme("themeMode", data.optionValue ?? "Light")
@@ -451,7 +488,7 @@ export default function SettingsPage({
           </Field>
           <Field label="DPI 缩放（重启生效）">
             <Dropdown
-              value={draft.personalization.dpiScale}
+              value={DPI_LABELS[draft.personalization.dpiScale] ?? draft.personalization.dpiScale}
               selectedOptions={[draft.personalization.dpiScale]}
               onOptionSelect={(_, data) =>
                 updatePersonalization("dpiScale", data.optionValue ?? "Auto")
@@ -459,7 +496,7 @@ export default function SettingsPage({
             >
               {DPI_OPTIONS.map((item) => (
                 <Option key={item} value={item}>
-                  {item}
+                  {DPI_LABELS[item] ?? item}
                 </Option>
               ))}
             </Dropdown>
@@ -487,9 +524,10 @@ export default function SettingsPage({
           <Caption1 className={styles.muted}>
             当前版本中文优先；英文/葡语切换将在后续提供。
           </Caption1>
-          <Field label="窗口尺寸">
+          <Field label="窗口尺寸（宽, 高）">
             <Input
               value={draft.personalization.windowSize}
+              placeholder="1112, 754"
               onChange={(_, data) =>
                 updatePersonalization("windowSize", data.value)
               }

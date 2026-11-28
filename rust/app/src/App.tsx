@@ -260,6 +260,12 @@ const useStyles = makeStyles({
   muted: {
     color: tokens.colorNeutralForeground3,
   },
+  sidebarCaption: {
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
   empty: {
     padding: "48px 12px",
     textAlign: "center",
@@ -663,15 +669,24 @@ export default function App() {
               <>
                 {status?.connected ? (
                   <>
-                    <Caption1 className={styles.muted}>
+                    <Caption1
+                      className={styles.sidebarCaption}
+                      title={`PID ${status.pid} · 事件 ${status.websocketReceived}`}
+                    >
                       PID {status.pid} · 事件 {status.websocketReceived}
                     </Caption1>
-                    <Caption1 className={styles.muted}>
+                    <Caption1
+                      className={styles.sidebarCaption}
+                      title={`epoch ${status.epoch} · 重连 ${status.websocketReconnects}`}
+                    >
                       epoch {status.epoch} · 重连 {status.websocketReconnects}
                     </Caption1>
                   </>
                 ) : (
-                  <Caption1 className={styles.muted}>
+                  <Caption1
+                    className={styles.sidebarCaption}
+                    title="等待英雄联盟客户端"
+                  >
                     等待英雄联盟客户端
                   </Caption1>
                 )}
@@ -831,16 +846,21 @@ export default function App() {
               </>
             )}
 
-            {tab === "search" && (
+            <div style={{ display: tab === "search" ? undefined : "none" }}>
               <SearchPage
                 connected={Boolean(status?.connected)}
+                active={tab === "search"}
                 request={searchRequest}
+                onRequestHandled={() => setSearchRequest(null)}
               />
-            )}
+            </div>
 
             {tab === "gameinfo" && (
               <GameInfoPage
                 connected={Boolean(status?.connected)}
+                reserveGameInfo={Boolean(
+                  config?.functions.enableReserveGameinfo,
+                )}
                 onOpenSearch={openSearch}
               />
             )}
@@ -855,19 +875,28 @@ export default function App() {
               />
             )}
 
-            {tab === "functions" && config && (
-              <GameFunctionsPage config={config} onSaved={setConfig} />
+            {config && (
+              <>
+                <div style={{ display: tab === "functions" ? undefined : "none" }}>
+                  <GameFunctionsPage config={config} onSaved={setConfig} />
+                </div>
+                <div style={{ display: tab === "settings" ? undefined : "none" }}>
+                  <SettingsPage
+                    config={config}
+                    active={tab === "settings"}
+                    onSaved={setConfig}
+                  />
+                </div>
+              </>
             )}
 
             {tab === "opgg" && (
               <OpggPage connected={Boolean(status?.connected)} />
             )}
 
-            {tab === "settings" && config && (
-              <SettingsPage config={config} onSaved={setConfig} />
+            {tab === "auxiliary" && (
+              <AuxiliaryPage connected={Boolean(status?.connected)} />
             )}
-
-            {tab === "auxiliary" && <AuxiliaryPage />}
 
             {tab !== "home" &&
               tab !== "career" &&

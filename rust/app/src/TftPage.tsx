@@ -5,6 +5,8 @@ import {
   Badge,
   Button,
   Caption1,
+  MessageBar,
+  MessageBarBody,
   Spinner,
   Text,
   Title3,
@@ -179,7 +181,18 @@ export default function TftPage({
         </Button>
       </div>
 
-      {error && <Caption1 className={styles.muted}>{error}</Caption1>}
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <span>{error}</span>
+              <Button size="small" onClick={() => void load()}>
+                重试
+              </Button>
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {loading && !data && <Spinner label="读取 TFT 战绩…" />}
       {!loading && connected && games.length === 0 && (
         <div className={styles.empty}>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Badge,
@@ -271,10 +271,14 @@ export interface SearchRequest {
 
 export default function SearchPage({
   connected,
+  active = true,
   request,
+  onRequestHandled,
 }: {
   connected: boolean;
+  active?: boolean;
   request?: SearchRequest | null;
+  onRequestHandled?: () => void;
 }) {
   const styles = useStyles();
   const [query, setQuery] = useState("");
@@ -290,6 +294,8 @@ export default function SearchPage({
   const [tftSelected, setTftSelected] = useState<TftGameSummary | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [history, setHistory] = useState("");
+  const searchSeq = useRef(0);
+  const detailSeq = useRef(0);
 
   useEffect(() => {
     let disposed = false;
@@ -340,7 +346,8 @@ export default function SearchPage({
   }
 
   async function runSearch(text: string, gameId?: number) {
-    if (!connected || !text || loading) return;
+    if (!connected || !text) return;
+    const seq = ++searchSeq.current;
     setLoading(true);
     setError("");
     setSelected(null);
@@ -353,23 +360,29 @@ export default function SearchPage({
       const result = await invoke<PlayerPayload>("player_overview", {
         query: text,
       });
+      if (seq !== searchSeq.current) return;
       setPlayer(result);
       setHistory(text);
       void invoke("config_patch", {
         patch: { other: { searchHistory: text } },
       }).catch(() => undefined);
       if (gameId) {
+        const token = ++detailSeq.current;
         setDetailLoading(true);
         try {
-          setSelected(
-            await invoke<GameDetail>("game_detail", { gameId }),
-          );
+          const detail = await invoke<GameDetail>("game_detail", { gameId });
+          if (seq === searchSeq.current && token === detailSeq.current) {
+            setSelected(detail);
+          }
         } catch (cause) {
           try {
             const tft = await invoke<{ games?: TftGameSummary[] }>(
               "tft_recent",
               { count: 40 },
             );
+            if (seq !== searchSeq.current || token !== detailSeq.current) {
+              return;
+            }
             const game = (tft.games ?? []).find(
               (entry) => entry.gameId === gameId,
             );
@@ -381,15 +394,20 @@ export default function SearchPage({
               );
             }
           } catch {
-            setError(
-              friendlyError(cause, "读取对局详情失败，请稍后重试。"),
-            );
+            if (seq === searchSeq.current && token === detailSeq.current) {
+              setError(
+                friendlyError(cause, "读取对局详情失败，请稍后重试。"),
+              );
+            }
           }
         } finally {
-          setDetailLoading(false);
+          if (seq === searchSeq.current && token === detailSeq.current) {
+            setDetailLoading(false);
+          }
         }
       }
     } catch (cause) {
+      if (seq !== searchSeq.current) return;
       setPlayer(null);
       setError(
         String(cause).includes("SummonerNotFound")
@@ -397,7 +415,9 @@ export default function SearchPage({
           : friendlyError(cause, "加载失败，请稍后重试。"),
       );
     } finally {
-      setLoading(false);
+      if (seq === searchSeq.current) {
+        setLoading(false);
+      }
     }
   }
 
@@ -409,10 +429,12 @@ export default function SearchPage({
   const requestNonce = request?.nonce;
   useEffect(() => {
     if (!request || !request.query) return;
+    onRequestHandled?.();
+    if (!active) return;
     setQuery(request.query);
     void runSearch(request.query, request.gameId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestNonce]);
+  }, [requestNonce, active]);
 
   function focusPlayer(
     player: {
@@ -452,16 +474,22 @@ export default function SearchPage({
   }
 
   async function openGame(match: MatchSummary) {
+    const token = ++detailSeq.current;
+    setSelected(null);
+    setTftSelected(null);
+    setError("");
     setDetailLoading(true);
     try {
       const detail = await invoke<GameDetail>("game_detail", {
         gameId: match.gameId,
       });
-      setSelected(detail);
+      if (token === detailSeq.current) setSelected(detail);
     } catch (cause) {
-      setError(friendlyError(cause, "读取对局详情失败，请稍后重试。"));
+      if (token === detailSeq.current) {
+        setError(friendlyError(cause, "读取对局详情失败，请稍后重试。"));
+      }
     } finally {
-      setDetailLoading(false);
+      if (token === detailSeq.current) setDetailLoading(false);
     }
   }
 
@@ -491,7 +519,7 @@ export default function SearchPage({
         />
         <Button
           appearance="primary"
-          disabled={!connected || loading}
+          disabled={!connected}
           onClick={() => void search()}
         >
           {loading ? "搜索中…" : "搜索"}
@@ -715,7 +743,10 @@ export default function SearchPage({
                   puuid={puuid}
                   queueName={queueName(selected)}
                   styles={styles}
-                  onClose={() => setSelected(null)}
+                  onClose={() => {
+                    detailSeq.current += 1;
+                    setSelected(null);
+                  }}
                   onPlayerClick={(player) =>
                     focusPlayer(player, selected.gameId)
                   }

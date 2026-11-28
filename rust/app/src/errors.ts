@@ -15,5 +15,11 @@ export function friendlyError(
         ? cause
         : JSON.stringify(cause);
   void invoke("ui_log", { message: detail }).catch(() => undefined);
+  if (/NotConnected|not connected|客户端未连接/i.test(detail)) {
+    return "请先连接英雄联盟客户端。";
+  }
+  if (/SummonerNotFound|未找到召唤师/i.test(detail)) {
+    return "未找到该玩家，请检查名称后重试。";
+  }
   return message;
 }

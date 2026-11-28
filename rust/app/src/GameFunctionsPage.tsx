@@ -29,6 +29,11 @@ const useStyles = makeStyles({
     alignItems: "center",
     justifyContent: "space-between",
     gap: "12px",
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
+    padding: "4px 0 8px",
+    backgroundColor: tokens.colorNeutralBackground1,
   },
   grid: {
     display: "block",
@@ -90,6 +95,17 @@ const POSITION_LABELS: Record<string, string> = {
   SUPPORT: "辅助",
 };
 
+type NumberKey =
+  | "careerGamesNumber"
+  | "autoAcceptMatchingDelay"
+  | "autoBanDelay";
+
+const NUMBER_RANGES: Record<NumberKey, [number, number]> = {
+  careerGamesNumber: [1, 20],
+  autoAcceptMatchingDelay: [0, 3600],
+  autoBanDelay: [0, 3600],
+};
+
 export default function GameFunctionsPage({
   config,
   onSaved,
@@ -99,6 +115,11 @@ export default function GameFunctionsPage({
 }) {
   const styles = useStyles();
   const [draft, setDraft] = useState<FunctionConfig>(config.functions);
+  const [numberText, setNumberText] = useState<Record<NumberKey, string>>({
+    careerGamesNumber: String(config.functions.careerGamesNumber),
+    autoAcceptMatchingDelay: String(config.functions.autoAcceptMatchingDelay),
+    autoBanDelay: String(config.functions.autoBanDelay),
+  });
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [listPosition, setListPosition] = useState("general");
@@ -116,6 +137,11 @@ export default function GameFunctionsPage({
 
   useEffect(() => {
     setDraft(config.functions);
+    setNumberText({
+      careerGamesNumber: String(config.functions.careerGamesNumber),
+      autoAcceptMatchingDelay: String(config.functions.autoAcceptMatchingDelay),
+      autoBanDelay: String(config.functions.autoBanDelay),
+    });
   }, [config]);
 
   useEffect(() => {
@@ -158,6 +184,16 @@ export default function GameFunctionsPage({
     value: FunctionConfig[K],
   ) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function commitNumber(key: NumberKey) {
+    const [min, max] = NUMBER_RANGES[key];
+    const parsed = Number(numberText[key]);
+    const next = Number.isFinite(parsed)
+      ? Math.min(max, Math.max(min, Math.round(parsed)))
+      : draft[key];
+    setNumberText((current) => ({ ...current, [key]: String(next) }));
+    if (next !== draft[key]) update(key, next);
   }
 
   async function save() {
@@ -247,10 +283,16 @@ export default function GameFunctionsPage({
           <Field label="职业战绩场次">
             <Input
               type="number"
-              value={String(draft.careerGamesNumber)}
+              min={1}
+              max={20}
+              value={numberText.careerGamesNumber}
               onChange={(_, data) =>
-                update("careerGamesNumber", Number(data.value) || 0)
+                setNumberText((current) => ({
+                  ...current,
+                  careerGamesNumber: data.value,
+                }))
               }
+              onBlur={() => commitNumber("careerGamesNumber")}
             />
           </Field>
           <Field label="自动接受对局">
@@ -264,10 +306,15 @@ export default function GameFunctionsPage({
           <Field label="自动接受延迟（秒）">
             <Input
               type="number"
-              value={String(draft.autoAcceptMatchingDelay)}
+              min={0}
+              value={numberText.autoAcceptMatchingDelay}
               onChange={(_, data) =>
-                update("autoAcceptMatchingDelay", Number(data.value) || 0)
+                setNumberText((current) => ({
+                  ...current,
+                  autoAcceptMatchingDelay: data.value,
+                }))
               }
+              onBlur={() => commitNumber("autoAcceptMatchingDelay")}
             />
           </Field>
           <Field label="自动重连">
@@ -334,10 +381,15 @@ export default function GameFunctionsPage({
           <Field label="自动禁用延迟（秒）">
             <Input
               type="number"
-              value={String(draft.autoBanDelay)}
+              min={0}
+              value={numberText.autoBanDelay}
               onChange={(_, data) =>
-                update("autoBanDelay", Number(data.value) || 0)
+                setNumberText((current) => ({
+                  ...current,
+                  autoBanDelay: data.value,
+                }))
               }
+              onBlur={() => commitNumber("autoBanDelay")}
             />
           </Field>
           <Caption1 className={styles.muted}>自动禁用名单</Caption1>
